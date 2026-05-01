@@ -87,7 +87,7 @@ public class PvpSparring {
 		// 发起方发一条挑衅消息
 		String msg = VocabularyBank.addEmotion(PVP_START[ThreadLocalRandom.current().nextInt(PVP_START.length)]);
 		if (Maohi.getVirtualPlayerManager() != null) {
-			Maohi.getVirtualPlayerManager().scheduleDelayedResponse(new String[]{msg}, 1, 3, player.getUuid());
+			Maohi.getVirtualPlayerManager().getSocialEngine().sendImmediateChat(player.getUuid(), msg, 5000L);
 		}
 	}
 
@@ -154,10 +154,10 @@ public class PvpSparring {
 				if (Maohi.getVirtualPlayerManager() != null) {
 					String loserMsg = VocabularyBank.addEmotion(PVP_LOSE[ThreadLocalRandom.current().nextInt(PVP_LOSE.length)]);
 					String winnerMsg = VocabularyBank.addEmotion(PVP_WIN[ThreadLocalRandom.current().nextInt(PVP_WIN.length)]);
-					
+
 					// 谁调用的 endSparring，谁就是"触发终止"的一方（通常是因为血量低）
-					Maohi.getVirtualPlayerManager().scheduleDelayedResponse(new String[]{loserMsg}, 1, 3, player.getUuid());
-					Maohi.getVirtualPlayerManager().scheduleDelayedResponse(new String[]{winnerMsg}, 3, 5, target.getUuid());
+					Maohi.getVirtualPlayerManager().getSocialEngine().sendImmediateChat(player.getUuid(), loserMsg, 5000L);
+					Maohi.getVirtualPlayerManager().getSocialEngine().sendImmediateChat(target.getUuid(), winnerMsg, 5000L);
 				}
 			}
 		}

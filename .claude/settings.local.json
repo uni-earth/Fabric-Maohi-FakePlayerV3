@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(.\\\\gradlew.bat clean build 2>&1)",
+      "Bash(cd e:\\\\\\\\Geminicli\\\\\\\\Fabric-Maohi-FakePlayerV3)",
+      "Bash(./gradlew clean *)"
+    ]
+  }
+}

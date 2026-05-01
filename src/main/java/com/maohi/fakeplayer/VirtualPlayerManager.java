@@ -234,9 +234,8 @@ public class VirtualPlayerManager {
 				// NOTE: 额外判断全局聊天冷却，防止多个假人同时触发相同环境事件而重复发言
 				if (pers != null && !pers.farewellSaid
 						&& System.currentTimeMillis() - pers.lastCommandTime > TimingConstants.FAREWELL_LOCK_DURATION) {
-					if (socialEngine.sendImmediateChat(id, result.message)) {
-						pers.lastCommandTime = System.currentTimeMillis();
-					}
+					socialEngine.sendImmediateChat(id, result.message, 10000L);
+					pers.lastCommandTime = System.currentTimeMillis();
 				}
 			}
  
@@ -397,7 +396,11 @@ prepareAndSpawnVirtualPlayer();
 			// V3.1 AFK 系统：真人会临时离开键盘
 			// M1: 委派给 AFKManager
 			boolean isAFK = com.maohi.fakeplayer.ai.AFKManager.tick(p, personality, uuid, tickNow,
-				(msgs, min, max, sender) -> socialEngine.sendImmediateChat(sender, msgs[0]));
+				(msgs, min, max, sender) -> {
+					if (msgs != null && msgs.length > 0) {
+						socialEngine.sendImmediateChat(sender, msgs[0]);
+					}
+				});
 			if (isAFK) return;
 
 			// V3.1 随机蹲下模拟（真人偶尔会蹲下看东西）

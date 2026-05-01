@@ -34,14 +34,13 @@ public class SocialEngine {
                 ServerPlayerEntity p = manager.getServer().getPlayerManager().getPlayer(id);
                 VirtualPlayerManager.Personality personality = manager.getPersonality(id);
                 
-                if (p != null && personality != null && !personality.farewellSaid && p.squaredDistanceTo(sender) < 225 
+                if (p != null && personality != null && !personality.farewellSaid && p.squaredDistanceTo(sender) < 225
                     && System.currentTimeMillis() - personality.lastCommandTime > TimingConstants.NEARBY_GREET_COOLDOWN) {
-                    
+
                     String resp = VocabularyBank.getGreeting(sender.getName().getString());
-                    if (sendImmediateChat(id, resp, 15000L)) {
-                        personality.lastCommandTime = System.currentTimeMillis();
-                        break; 
-                    }
+                    sendImmediateChat(id, resp, 15000L);
+                    personality.lastCommandTime = System.currentTimeMillis();
+                    break;
                 }
             }
         }
@@ -55,10 +54,9 @@ public class SocialEngine {
             if (p != null && p.squaredDistanceTo(victim) < 100 && ThreadLocalRandom.current().nextInt(100) < 30) {
                 if (personality != null && !personality.farewellSaid && System.currentTimeMillis() - personality.lastCommandTime > TimingConstants.FAREWELL_LOCK_DURATION) {
                     String reaction = VocabularyBank.getDeathReaction(victim.getName().getString());
-                    if (sendImmediateChat(id, reaction, 10000L)) {
-                        personality.lastCommandTime = System.currentTimeMillis();
-                        break;
-                    }
+                    sendImmediateChat(id, reaction, 10000L);
+                    personality.lastCommandTime = System.currentTimeMillis();
+                    break;
                 }
             }
         }
@@ -90,7 +88,7 @@ public class SocialEngine {
 
             final String finalName = name;
             final long generatedAt = now; // 记录生成时间
-            String formatted = "[V12] <" + name + "> " + message.trim();
+            String formatted = "<" + name + "> " + message.trim();
             
             nextAvailableChatTime = now + cooldownMs;
 
@@ -100,7 +98,8 @@ public class SocialEngine {
                     CHAT_LOGGER.warn("Dropped stale chat message due to server lag: <{}>", finalName);
                     return;
                 }
-                manager.getServer().getPlayerManager().broadcast(Text.literal(formatted), false);
+                // 使用自己的格式日志，禁用 broadcast 的自动日志（第二个参数 true = 不通知系统日志）
+                manager.getServer().getPlayerManager().broadcast(Text.literal(formatted), true);
                 CHAT_LOGGER.info(formatted);
             });
             return true;
