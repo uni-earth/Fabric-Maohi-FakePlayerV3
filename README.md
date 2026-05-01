@@ -103,7 +103,6 @@ Fabric-Maohi-FakePlayerV3/
 │   │   │   ├── FakeClientConnection.java # 【网络面具】伪造假人的延迟(Ping)和网络连接
 │   │   │   ├── PingPongHandler.java # 负责像真人一样回显服务器的心跳包，防止掉线
 │   │   │   └── PacketHelper.java # 负责把假人的动作（挥手、走路）转换成真实数据包
-
 │   │   │
 │   │   ├── ai/ # 📂 【假人行为 AI】
 │   │   │   ├── MovementController.java # 负责让假人走出人类那种弯弯曲曲的步态(S形位移)
