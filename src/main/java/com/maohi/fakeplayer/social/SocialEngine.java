@@ -133,7 +133,7 @@ public class SocialEngine {
                             // V5.0: 暴力方案 - 不再指望官方翻译键，直接手动把名字“焊”在消息最前面
                             String name = manager.getVirtualPlayerName(p.getUuid());
                             if (name == null || name.isEmpty()) name = p.getName().getString();
-                            if (name == null || name.isEmpty()) name = "VPlayer";
+                            if (name == null || name.isEmpty()) name = "Bot_" + p.getUuid().toString().substring(0, 4);
 
                             String formatted = "<" + name + "> " + finalMessage.trim();
                             
