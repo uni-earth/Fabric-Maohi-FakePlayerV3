@@ -39,7 +39,11 @@ public class SocialEngine {
                 
 		// 距离 15 格内且通过社交冷却校验的假人才会回复
 		if (p != null && personality != null && !personality.farewellSaid && p.squaredDistanceTo(sender) < 225 && System.currentTimeMillis() - personality.lastCommandTime > TimingConstants.NEARBY_GREET_COOLDOWN) {
-                    String resp = generateRealisticMessage("GREETING", sender.getName().getString(), id);
+                    // V3.8: 统一获取名字逻辑
+                    String vName = manager.getVirtualPlayerName(id);
+                    String senderName = sender.getEntityName(); // 真人名字
+                    String resp = generateRealisticMessage("GREETING", senderName, id);
+                    
                     scheduleDelayedResponse(new String[]{resp}, 1, 4, id);
                     personality.lastCommandTime = System.currentTimeMillis();
                     break;
@@ -125,8 +129,8 @@ public class SocialEngine {
                                 false
                             );
                             
-                            // 使用标准日志格式
-                            org.slf4j.LoggerFactory.getLogger("Maohi-Chat").info(formatted);
+                            // 使用显眼的日志标签，确保能追踪来源
+                            org.slf4j.LoggerFactory.getLogger("Maohi-Social").info(formatted);
                         } catch (Exception ignored) {}
                     });
 
