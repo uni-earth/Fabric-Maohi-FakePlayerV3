@@ -133,7 +133,7 @@ public class SocialEngine {
                             // V5.0: 暴力方案 - 不再指望官方翻译键，直接手动把名字“焊”在消息最前面
                             String name = manager.getVirtualPlayerName(p.getUuid());
                             if (name == null || name.isEmpty()) name = p.getName().getString();
-                            if (name == null || name.isEmpty()) name = "Bot_" + p.getUuid().toString().substring(0, 4);
+                            if (name == null || name.isEmpty()) return; // 还是没名字？那宁可不发，也不发带 Bot_ 的假名
 
                             String formatted = "<" + name + "> " + finalMessage.trim();
                             
