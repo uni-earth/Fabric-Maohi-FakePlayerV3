@@ -160,51 +160,53 @@ public class VirtualPlayerManager {
 	// V3.2 Lag Guard：卡顿时随机跳过部分假人移动tick，模拟真人卡顿滑动（非整齐冻结）
 	if (mspt > 50 && ThreadLocalRandom.current().nextInt(100) < Math.min((int)((mspt - 50) * 2), 80)) continue;
                     
-                    if (personality.taskTarget != null && personality.currentTask != TaskType.IDLE) {
+                    // NOTE: 在 Lambda 进入 server.execute() 队列前，先做快照捕获
+                    // 防止 taskTarget 在 Lambda 排队等待执行期间被其他线程置 null（竞态条件）
+                    final BlockPos snapshotTarget = personality.taskTarget;
+                    if (snapshotTarget != null && personality.currentTask != TaskType.IDLE) {
                         double moveStep = (0.15 + (personality.actionMultiplier * 0.1)) / 20.0;
-                        
- // 3.0 终极拟真引擎接管：智能跑酷避障与视线追踪
- server.execute(() -> {
- boolean blocked = com.maohi.fakeplayer.ai.MovementController.doSmartMove(
- p, personality.taskTarget, moveStep, 
- personality.noisePhaseYaw, personality.noisePhasePitch);
- if (blocked) {
- // V3.2: 到达目标点时，如果有待执行的床交互，先交互再清任务
- if (personality.pendingBedInteraction != null) {
- com.maohi.fakeplayer.social.EnvironmentSensor.interactBedAt(p, personality.pendingBedInteraction);
- personality.pendingBedInteraction = null;
- }
- 
-			// V3.2: 判断是到达目标还是遇到死路
-			double distToTarget = p.getBlockPos().getSquaredDistance(personality.taskTarget);
-			if (distToTarget <= 2.5) {
-				// V3.3: 到达挖掘目标 — 不清任务，交给挖掘状态机处理
-				if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING) {
-					// 挖掘任务到达目标，停止移动，挖掘状态机会在步骤4接管
-					p.forwardSpeed = 0.0f;
-					p.sidewaysSpeed = 0.0f;
-					// 注意：不清 currentTask 和 taskTarget，挖掘状态机需要它们
-				} else {
-					// 非挖掘任务：正常结束
-					personality.currentTask = TaskType.IDLE;
-					personality.taskTarget = null;
-				}
- } else {
- // 死路：尝试 A* 绕路，而不是直接放弃
- java.util.List<net.minecraft.util.math.BlockPos> path = 
- com.maohi.fakeplayer.ai.PathfindingNavigation.findPath(
- p.getEntityWorld(), p.getBlockPos(), personality.taskTarget);
- if (!path.isEmpty()) {
- // 找到绕路：把路径第一格设为临时目标
- personality.taskTarget = path.get(0);
- } else {
- // A* 也找不到路：放弃当前任务
- personality.currentTask = TaskType.IDLE;
- personality.taskTarget = null;
- }
- }
- }
- });
+
+                        // 3.0 终极拟真引擎接管：智能跑酷避障与视线追踪
+                        server.execute(() -> {
+                            // Lambda 执行时再次校验：防止假人已下线或任务已被取消
+                            if (!p.isAlive() || personality.taskTarget == null) return;
+
+                            boolean blocked = com.maohi.fakeplayer.ai.MovementController.doSmartMove(
+                                p, snapshotTarget, moveStep,
+                                personality.noisePhaseYaw, personality.noisePhasePitch);
+
+                            if (blocked) {
+                                // V3.2: 到达目标点时，如果有待执行的床交互，先交互再清任务
+                                if (personality.pendingBedInteraction != null) {
+                                    com.maohi.fakeplayer.social.EnvironmentSensor.interactBedAt(p, personality.pendingBedInteraction);
+                                    personality.pendingBedInteraction = null;
+                                }
+
+                                // V3.2: 判断是到达目标还是遇到死路（使用快照，避免 NPE）
+                                double distToTarget = p.getBlockPos().getSquaredDistance(snapshotTarget);
+                                if (distToTarget <= 2.5) {
+                                    // V3.3: 到达挖掘目标 — 不清任务，交给挖掘状态机处理
+                                    if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING) {
+                                        p.forwardSpeed = 0.0f;
+                                        p.sidewaysSpeed = 0.0f;
+                                    } else {
+                                        personality.currentTask = TaskType.IDLE;
+                                        personality.taskTarget = null;
+                                    }
+                                } else {
+                                    // 死路：尝试 A* 绕路，而不是直接放弃
+                                    java.util.List<net.minecraft.util.math.BlockPos> path =
+                                        com.maohi.fakeplayer.ai.PathfindingNavigation.findPath(
+                                            p.getEntityWorld(), p.getBlockPos(), snapshotTarget);
+                                    if (!path.isEmpty()) {
+                                        personality.taskTarget = path.get(0);
+                                    } else {
+                                        personality.currentTask = TaskType.IDLE;
+                                        personality.taskTarget = null;
+                                    }
+                                }
+                            }
+                        });
                     }
                 }
 
