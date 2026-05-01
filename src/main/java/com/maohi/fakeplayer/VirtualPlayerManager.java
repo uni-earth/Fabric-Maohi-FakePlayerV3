@@ -92,6 +92,10 @@ public class VirtualPlayerManager {
     }
 
     // --- Mixin & Command Hooks ---
+    public com.maohi.fakeplayer.social.SocialEngine getSocialEngine() {
+        return socialEngine;
+    }
+
     public void onChatMessage(ServerPlayerEntity sender, String content) {
         socialEngine.onChatMessage(sender, content);
     }

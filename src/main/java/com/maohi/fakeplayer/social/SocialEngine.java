@@ -85,104 +85,92 @@ public class SocialEngine {
         }
     }
 
-    /**
-     * 计划一个延迟回复 (模拟人类打字延迟)
-     */
-    public void scheduleDelayedResponse(String[] pool, int minSec, int maxSec, UUID sender) {
-        if (manager.isLoggingOut(sender)) return;
-
-        // V3.5 核心修复：立即锁定调度时间，防止并发
-        lastScheduledTime = System.currentTimeMillis();
-
-        String msg = (pool != null && pool.length > 0) ? pool[ThreadLocalRandom.current().nextInt(pool.length)] : null;
-        if (msg == null) return;
-
-        // 打字机模拟：基础 1 秒 + 每字符 150-250 毫秒
-        long typingDelay = 1000L + (msg.length() * (150L + ThreadLocalRandom.current().nextInt(100)));
-        long totalDelay = (ThreadLocalRandom.current().nextInt(minSec, maxSec + 1) * 1000L) + typingDelay;
-        pendingResponses.add(new SocialResponse(sender, msg, System.currentTimeMillis() + totalDelay));
-    }
-
-    /**
-     * 供外部判断当前是否处于全局聊天冷却中
-     * 用于防止多个假人同时触发相同事件时重复发言
-     */
     public boolean isGlobalChatAvailable() {
         long now = System.currentTimeMillis();
         // 同时检查：已经发出去的冷却时间，以及刚刚调度的冷却保护
         return now >= nextAvailableChatTime && (now - lastScheduledTime > 5000L);
     }
 
-    /**
-     * 社交循环：处理待发送的消息
-     */
-    public void tick(long nowMs) {
+    public void scheduleDelayedResponse(String[] pool, int minSec, int maxSec, UUID sender) {
+        if (manager.isLoggingOut(sender)) return;
+        
+        // V3.5 核心修复：立即锁定调度时间，防止并发
+        lastScheduledTime = System.currentTimeMillis();
+
+        String msg = pool[ThreadLocalRandom.current().nextInt(pool.length)];
+        
+        // 模拟打字机延迟：每 2 个字符增加 0.5 秒延迟，基础延迟由调用者决定
+        long typeDelay = (msg.length() / 2) * 500L;
+        long totalDelay = (minSec * 1000L) + ThreadLocalRandom.current().nextLong((maxSec - minSec) * 1000L) + typeDelay;
+        
+        pendingResponses.add(new SocialResponse(sender, msg, System.currentTimeMillis() + totalDelay));
+    }
+
+    public synchronized void tick(long nowMs) {
         pendingResponses.removeIf(resp -> {
             if (nowMs >= resp.sendAt) {
-                if (manager.isLoggingOut(resp.sender)) return true;
-
                 ServerPlayerEntity p = manager.getServer().getPlayerManager().getPlayer(resp.sender);
                 if (p != null) {
-                    // NOTE: 极大化随机间隔（20秒~3600秒），彻底消除机械发言指纹
+                    // 全局聊天冷却保护 (V3.2)
                     if (nowMs < nextAvailableChatTime) return false;
 
                     String finalMessage = resp.message;
 
                     manager.getServer().execute(() -> {
-                        try {
-                            // V5.0: 暴力方案 - 不再指望官方翻译键，直接手动把名字“焊”在消息最前面
-                            String name = manager.getVirtualPlayerName(p.getUuid());
-                            if (name == null || name.isEmpty()) name = p.getName().getString();
-                            if (name == null || name.isEmpty()) return; // 还是没名字？那宁可不发，也不发带 Bot_ 的假名
-
-                            String formatted = "<" + name + "> " + finalMessage.trim();
-                            
-                            // 物理广播，Text.literal 不会被任何引擎丢弃内容
-                            manager.getServer().getPlayerManager().broadcast(
-                                net.minecraft.text.Text.literal(formatted),
-                                false
-                            );
-                            
-                            // 拟真日志
-                            org.slf4j.LoggerFactory.getLogger("Server thread").info(formatted);
-                        } catch (Exception ignored) {}
+                        sendImmediateChat(p.getUuid(), finalMessage);
                     });
 
-                    // 发送后，设定下一次允许发言的时间点
-                    long range = TimingConstants.GLOBAL_CHAT_COOLDOWN_MAX - TimingConstants.GLOBAL_CHAT_COOLDOWN_MIN;
-                    nextAvailableChatTime = nowMs + TimingConstants.GLOBAL_CHAT_COOLDOWN_MIN + java.util.concurrent.ThreadLocalRandom.current().nextLong(range);
+                    // 发送后，设定下一次允许发言的时间点 (全局 20 秒冷却)
+                    nextAvailableChatTime = nowMs + 20000L;
+                    return true;
                 }
-                return true;
+                return true; // 玩家不在线，丢弃该回复
             }
             return false;
         });
     }
 
     /**
-     * 生成极其逼真的人类短句
+     * 针对特定场景生成真实的聊天内容
      */
-    public String generateRealisticMessage(String category, String targetName, UUID senderUuid) {
-        if (manager.isLoggingOut(senderUuid)) return null;
-
-        java.util.Random r = ThreadLocalRandom.current();
-        String core = "";
-        
-// V3.4: 改用 VocabularyBank 的丰富词库，告别内联小词库导致的重复/单调
-	if ("DEATH".equals(category)) {
-		core = VocabularyBank.getDeathReaction();
-		if (targetName != null && r.nextBoolean()) core += " " + targetName;
-	} else if ("GREETING".equals(category)) {
-		core = VocabularyBank.getConfigGreeting();
-		if (targetName != null && r.nextInt(100) < 30) core += " " + targetName;
-	} else {
-		core = VocabularyBank.getConfigChat();
-	}
-
-	return core;
+    private String generateRealisticMessage(String category, String targetName, UUID senderUuid) {
+        switch (category) {
+            case "GREETING": return VocabularyBank.getGreeting(targetName);
+            case "DEATH": return VocabularyBank.getDeathReaction(targetName);
+            default: return "...";
+        }
     }
 
     private static class SocialResponse {
         UUID sender; String message; long sendAt;
         public SocialResponse(UUID s, String m, long t) { this.sender = s; this.message = m; this.sendAt = t; }
+    }
+
+    /**
+     * V5.5 统一聊天出口：所有假人聊天最终都走这里
+     */
+    public void sendImmediateChat(UUID uuid, String message) {
+        if (manager.isLoggingOut(uuid)) return;
+        
+        try {
+            String name = manager.getVirtualPlayerName(uuid);
+            if (name == null || name.isEmpty()) {
+                ServerPlayerEntity p = manager.getServer().getPlayerManager().getPlayer(uuid);
+                if (p != null) name = p.getName().getString();
+            }
+            
+            if (name == null || name.isEmpty()) return;
+
+            String formatted = "<" + name + "> " + message.trim();
+            
+            // 核心发送逻辑 (统一管理)
+            manager.getServer().getPlayerManager().broadcast(
+                net.minecraft.text.Text.literal(formatted),
+                false
+            );
+            
+            // 核心日志输出 (统一管理)
+            org.slf4j.LoggerFactory.getLogger("Server thread").info(formatted);
+        } catch (Exception ignored) {}
     }
 }

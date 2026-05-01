@@ -146,22 +146,8 @@ public class CombatReflex {
 			String panicMsg = com.maohi.fakeplayer.social.VocabularyBank.getCreeperFear();
 			com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
 			if (mgr != null && com.maohi.Maohi.getVirtualPlayerManager().getServer() != null) {
-				com.maohi.Maohi.getVirtualPlayerManager().getServer().execute(() -> {
-					try {
-						// V3.7: 统一使用管理器接口获取名字，确保 100% 兼容显示
-						// V5.0: 暴力方案 - 直接手动把名字“焊”在消息最前面
-						String name = mgr.getVirtualPlayerName(player.getUuid());
-						if (name == null || name.isEmpty()) name = player.getName().getString();
-						
-						String formatted = "<" + name + "> " + panicMsg.trim();
-						
-						com.maohi.Maohi.getVirtualPlayerManager().getServer().getPlayerManager().broadcast(
-							net.minecraft.text.Text.literal(formatted),
-							false
-						);
-						org.slf4j.LoggerFactory.getLogger("Server thread").info(formatted);
-					} catch (Exception ignored) {}
-				});
+						// V5.5: 统一调用 SocialEngine 的出口，不再自创格式，实现一处修改全服生效
+						mgr.getSocialEngine().sendImmediateChat(player.getUuid(), panicMsg);
 			}
 		}
 
