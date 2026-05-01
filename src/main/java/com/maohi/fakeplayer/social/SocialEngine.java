@@ -98,9 +98,8 @@ public class SocialEngine {
                     CHAT_LOGGER.warn("Dropped stale chat message due to server lag: <{}>", finalName);
                     return;
                 }
-                // 使用自己的格式日志，禁用 broadcast 的自动日志（第二个参数 true = 不通知系统日志）
-                manager.getServer().getPlayerManager().broadcast(Text.literal(formatted), true);
-                CHAT_LOGGER.info(formatted);
+                // 广播消息给所有玩家（第二个参数 false = 正常输出到聊天和日志）
+                manager.getServer().getPlayerManager().broadcast(Text.literal(formatted), false);
             });
             return true;
         } finally {

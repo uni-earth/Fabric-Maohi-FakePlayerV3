@@ -367,6 +367,11 @@ prepareAndSpawnVirtualPlayer();
                 }
 
 			com.maohi.fakeplayer.ai.SurvivalMechanics.handleSurvival(p, personality);
+
+		// ★ 任务分配：如果当前任务超时或处于 IDLE，分配新任务
+		if (personality.currentTask == TaskType.IDLE || System.currentTimeMillis() > personality.taskExpireTime) {
+			assignRandomTask(p, personality);
+		}
 			
 			// ★ P1-1 地下照明：检测亮度并自动插火把
 			com.maohi.fakeplayer.ai.BlockPlacer.tryPlaceTorch(p, personality);
@@ -445,8 +450,7 @@ prepareAndSpawnVirtualPlayer();
 	// M1: 委派给 AchievementSimulator
 	long onlineMs = tickNow - loginTimes.getOrDefault(uuid, tickNow);
 	if (!skipLowPriority && onlineMs > 180_000L && (totalTicks + (p.getUuid().hashCode() & 0x7FFFFFFF) % 600) % 600 == 0) {
-		long playtime = knownPlayers.get(p.getUuid()).totalPlaytime;
-		com.maohi.fakeplayer.ai.AchievementSimulator.tick(server, p, personality, playtime, () -> { dataDirty = true; });
+		com.maohi.fakeplayer.ai.AchievementSimulator.tick(server, p, personality, onlineMs, () -> { dataDirty = true; });
 	}
 
 // 4. 任务执行与方块破坏 (V3.3 全链路真实挖掘状态机)
@@ -826,6 +830,56 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
         MaohiCommands.recordSpawnSuccess();
         server.execute(() -> PlayerSpawner.spawn(this, name, skinCache.get(name)));
         return true;
+    }
+
+    /**
+     * 随机分配任务给假人
+     * 优先分配 MINING（40%）和 WOODCUTTING（35%），其他任务（25%）
+     */
+    private void assignRandomTask(ServerPlayerEntity player, Personality personality) {
+        int roll = ThreadLocalRandom.current().nextInt(100);
+        BlockPos target = null;
+
+        if (roll < 40) {
+            // 40%: 挖矿任务 - 在附近找矿石或往下挖
+            target = findNearestBlock(player.getEntityWorld(), player.getBlockPos(), 20, "ore");
+            if (target == null) {
+                // 没找到矿，就往下挖到 Y=0
+                BlockPos below = player.getBlockPos().down(player.getBlockY() - 5);
+                target = new BlockPos(below.getX(), Math.max(5, below.getY()), below.getZ());
+            }
+            if (target != null) {
+                personality.currentTask = TaskType.MINING;
+                personality.taskTarget = target;
+                personality.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_WORK;
+                return;
+            }
+        }
+
+        if (roll < 75) {
+            // 35%: 砍树任务 - 找最近的树或随机探索找树
+            target = findNearestBlock(player.getEntityWorld(), player.getBlockPos(), 20, "log");
+            if (target == null) {
+                // 没找到树，就随机探索
+                int randX = (ThreadLocalRandom.current().nextInt(60) - 30);
+                int randZ = (ThreadLocalRandom.current().nextInt(60) - 30);
+                target = player.getBlockPos().add(randX, 0, randZ);
+            }
+            if (target != null) {
+                personality.currentTask = TaskType.WOODCUTTING;
+                personality.taskTarget = target;
+                personality.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_WORK;
+                return;
+            }
+        }
+
+        // 25%: 探索任务 - 随机方向走
+        personality.currentTask = TaskType.EXPLORING;
+        int randX = (ThreadLocalRandom.current().nextInt(60) - 30);
+        int randZ = (ThreadLocalRandom.current().nextInt(60) - 30);
+        BlockPos explorePos = player.getBlockPos().add(randX, 0, randZ);
+        personality.taskTarget = explorePos;
+        personality.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_EXPLORE;
     }
 
     public boolean kickNamedPlayer(String name) {
