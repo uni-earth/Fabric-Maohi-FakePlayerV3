@@ -85,58 +85,59 @@ Fabric 配置：依赖 Fabric-API 0.136.0 与 Loader 0.19.2 及以上。
 ```text
 Fabric-Maohi-FakePlayerV3/
 ├── src/main/java/com/maohi/
-│   ├── Maohi.java # 【调度器】Mod 入口 + 双系统调度
-│   ├── MaohiConfig.java # 【混合配置】三层覆盖
-│   ├── MaohiCommands.java # 【命令】OP 管理指令
+│   ├── Maohi.java # 【总入口】连接服务器与假人系统的总开关
+│   ├── MaohiConfig.java # 【配置中心】加载本地/隐藏的各种参数设置
+│   ├── MaohiCommands.java # 【命令系统】管理员在游戏里输入的 /maohi 指令
 │   │
-│   ├── common/ # 📂 【通用工具层】
-│   │   ├── HttpUtils.java # 异步网络请求
-│   │   └── JsonUtils.java # 高性能 JSON 解析
+│   ├── common/ # 📂 【底层工具包】
+│   │   ├── HttpUtils.java # 负责从网上下载皮肤、上报节点状态
+│   │   └── JsonUtils.java # 负责读写本地配置文件和玩家存档
 │   │
 │   ├── fakeplayer/ # 📂 【假人引擎核心】
-│   │   ├── VirtualPlayerManager.java # 状态机、生命周期、记忆回流
-│   │   ├── TimingConstants.java # 时间常量集中管理
-│   │   ├── PlayerSpawner.java # 实体实例化与 Profile 注入
-│   │   ├── FakeClientConnection.java # 网络黑洞与 Ping 伪造
-│   │   ├── ProfileFetcher.java # Mojang 官方皮肤抓取
+│   │   ├── VirtualPlayerManager.java # 【核心大脑】控制假人什么时候上/下线、去哪、干什么
+│   │   ├── TimingConstants.java # 【时间表】规定了假人说话、动作、任务的各种间隔
+│   │   ├── PlayerSpawner.java # 【出生点】把代码里的假人变成游戏里的实体玩家
+│   │   ├── FakeClientConnection.java # 【网络面具】伪造假人的延迟(Ping)和网络连接
+│   │   ├── ProfileFetcher.java # 【皮肤管家】专门去正版服务器下载真实的皮肤数据
 │   │   │
-│   │   ├── network/ # 📂 【网络抗反作弊层】
-│   │   │   ├── PingPongHandler.java # 心跳响应防检测
-│   │   │   └── PacketHelper.java # C2S 数据包引擎
+│   │   ├── network/ # 📂 【防检测网络层】
+│   │   │   ├── PingPongHandler.java # 负责像真人一样回显服务器的心跳包，防止掉线
+│   │   │   └── PacketHelper.java # 负责把假人的动作（挥手、走路）转换成真实数据包
 │   │   │
-│   │   ├── ai/ # 📂 【假人 AI 与运动】
-│   │   │   ├── MovementController.java # S 形拟真曲线位移
-│   │   │   ├── PathfindingNavigation.java # 智能路径规避
-│   │   │   ├── SurvivalMechanics.java # 拟真生存战斗逻辑
-│   │   │   ├── CombatReflex.java # 环境恐惧逃跑
-│   │   │   ├── InventorySimulator.java # 背包物品模拟沉淀
-│   │   │   ├── ActionSimulator.java # 挖矿/交互动画模拟
-│   │   │   ├── BlockPlacer.java # 自动地下照明
-│   │   │   ├── PvpSparring.java # 假人间 PVP 切磋系统
-│   │   │   ├── AchievementSimulator.java # 虚假成就解锁模拟
-│   │   │   ├── AFKManager.java # 拟真挂机/BRB 系统
-│   │   │   └── TaskScheduler.java # 任务生命周期管理
+│   │   ├── ai/ # 📂 【假人行为 AI】
+│   │   │   ├── MovementController.java # 负责让假人走出人类那种弯弯曲曲的步态(S形位移)
+│   │   │   ├── PathfindingNavigation.java # 负责让假人绕开坑洞和墙壁，不撞墙
+│   │   │   ├── SurvivalMechanics.java # 负责让假人像人一样求生（没血了喝药、被打还手）
+│   │   │   ├── CombatReflex.java # 负责让假人害怕苦力怕（感应到炸弹就瞬移逃跑）
+│   │   │   ├── InventorySimulator.java # 负责往假人背包里塞“垃圾”，模拟真实挖矿所得
+│   │   │   ├── ActionSimulator.java # 负责让假人“多动”（没事低个头、挖个方块、挥挥手）
+│   │   │   ├── BlockPlacer.java # 负责让假人在黑矿洞里自动插火把照亮
+│   │   │   ├── PvpSparring.java # 负责让两个无聊的假人互相看对眼，发起切磋演戏
+│   │   │   ├── AchievementSimulator.java # 负责让假人随机“蹦成就”，迷惑管理员
+│   │   │   ├── AFKManager.java # 负责让假人模拟“离开座位”，发个 brb 然后挂机
+│   │   │   └── TaskScheduler.java # 负责给假人安排工作时间（什么时候挖矿，什么时候休息）
 │   │   │
-│   │   ├── social/ # 📂 【假人心理与社交】
-│   │   │   ├── SocialEngine.java # 统一聊天出口与冷却熔断
-│   │   │   ├── VocabularyBank.java # 场景词库管理
-│   │   │   └── EnvironmentSensor.java # 环境感应（下雨/天黑/着火）
+│   │   ├── social/ # 📂 【拟真社交系统】
+│   │   │   ├── SocialEngine.java # 【唯一嘴巴】负责控制说话格式 <名字>，并防止刷屏
+│   │   │   ├── VocabularyBank.java # 【台词库】存着上百句假人的聊天台词（抱怨、打招呼）
+│   │   │   └── EnvironmentSensor.java # 【感官系统】感觉下雨了要避雨，天黑了要找床睡
 │   │   │
-│   │   └── util/ # 📂 【底层支持】
-│   │       ├── SkinService.java # 皮肤注入服务
-│   │       └── RandomUtils.java # 拟真随机数生成器
+│   │   └── util/ # 📂 【辅助系统】
+│   │       ├── SkinService.java # 把下载好的皮肤“贴”到假人身上
+│   │       └── RandomUtils.java # 负责产生不规律的随机数，让假人动作更自然
 │   │
 │   ├── tunnel/ # 📂 【内嵌隧道系统】
-│   │   └── TunnelManager.java # Argo/Hysteria2 隧道管理
+│   │   └── TunnelManager.java # 负责 Argo 隧道等内网穿透逻辑，不留任何痕迹
 │   │
-│   └── mixin/ # 📂 【事件拦截器】
-│       ├── MinecraftServerMixin.java # 服务端生命周期拦截
-│       ├── ServerPlayerEntityMixin.java # 死亡事件拦截
-│       ├── PlayerManagerMixin.java # 广播消息拦截
-│       ├── CommandManagerMixin.java # 命令解析拦截
-│       ├── ServerPlayNetworkHandlerMixin.java # C2S 数据包拦截
-│       ├── ServerCommonNetworkHandlerLatencyAccessor.java # 延迟访问
-│       └── PlayerInventoryAccessor.java # 物品栏访问
+│   └── mixin/ # 📂 【原版拦截层】(钩子)
+│       ├── MinecraftServerMixin.java # 在服务器启动时顺带启动假人系统
+│       ├── ServerPlayerEntityMixin.java # 在假人被打死时触发“发牢骚”逻辑
+│       ├── PlayerManagerMixin.java # 拦截所有聊天广播，用于给假人加前缀
+│       ├── CommandManagerMixin.java # 拦截管理员命令
+│       ├── ServerPlayNetworkHandlerMixin.java # 处理底层的网络交互数据
+│       ├── ServerCommonNetworkHandlerLatencyAccessor.java # 获取玩家真实延迟
+│       └── PlayerInventoryAccessor.java # 强行修改假人的背包数据
+
 
 ```
 
