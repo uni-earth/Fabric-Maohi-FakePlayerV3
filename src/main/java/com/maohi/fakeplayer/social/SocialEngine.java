@@ -114,11 +114,11 @@ public class SocialEngine {
 
                     manager.getServer().execute(() -> {
                         try {
-                            // V3.5: 强制使用 GameProfile 名称，确保在任何生命周期都能拿到 ID
-                            String name = p.getGameProfile().getName();
+                            // V3.6: 改用 getEntityName() 确保兼容所有映射环境
+                            String name = p.getEntityName();
                             String formatted = "<" + name + "> " + finalMessage;
                             
-                            p.getServer().getPlayerManager().broadcast(
+                            manager.getServer().getPlayerManager().broadcast(
                                 net.minecraft.text.Text.literal(formatted),
                                 false
                             );
