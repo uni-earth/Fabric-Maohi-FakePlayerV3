@@ -41,7 +41,7 @@ public class SocialEngine {
 		if (p != null && personality != null && !personality.farewellSaid && p.squaredDistanceTo(sender) < 225 && System.currentTimeMillis() - personality.lastCommandTime > TimingConstants.NEARBY_GREET_COOLDOWN) {
                     // V3.8: 统一获取名字逻辑
                     String vName = manager.getVirtualPlayerName(id);
-                    String senderName = sender.getEntityName(); // 真人名字
+                    String senderName = sender.getName().getString(); // 真人名字
                     String resp = generateRealisticMessage("GREETING", senderName, id);
                     
                     scheduleDelayedResponse(new String[]{resp}, 1, 4, id);
