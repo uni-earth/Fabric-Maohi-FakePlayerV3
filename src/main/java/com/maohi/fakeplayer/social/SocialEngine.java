@@ -109,7 +109,6 @@ public class SocialEngine {
                     // NOTE: 极大化随机间隔（20秒~3600秒），彻底消除机械发言指纹
                     if (nowMs < nextAvailableChatTime) return false;
 
-                    String senderName = p.getName().getString();
                     String finalMessage = resp.message;
 
                     manager.getServer().execute(() -> {

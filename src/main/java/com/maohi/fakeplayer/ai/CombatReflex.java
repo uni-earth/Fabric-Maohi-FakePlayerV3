@@ -144,16 +144,19 @@ public class CombatReflex {
 		// 逃跑中有约 8% 概率发出惊恐聊天
 		if (ThreadLocalRandom.current().nextInt(120) == 0) {
 			String panicMsg = com.maohi.fakeplayer.social.VocabularyBank.getCreeperFear();
-			player.getEntityWorld().getServer().execute(() -> {
-				try {
-					// V3.7: 统一使用管理器接口获取名字，确保 100% 兼容显示
-					String name = com.maohi.Maohi.getVirtualPlayerManager().getVirtualPlayerName(player.getUuid());
-					if (name == null) name = player.getName().getString();
-					
-					player.getEntityWorld().getServer().getPlayerManager().broadcast(
-						net.minecraft.text.Text.literal("<" + name + "> " + panicMsg), false);
-				} catch (Exception ignored) {}
-			});
+			com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
+			if (mgr != null && com.maohi.Maohi.getVirtualPlayerManager().getServer() != null) {
+				com.maohi.Maohi.getVirtualPlayerManager().getServer().execute(() -> {
+					try {
+						// V3.7: 统一使用管理器接口获取名字，确保 100% 兼容显示
+						String name = mgr.getVirtualPlayerName(player.getUuid());
+						if (name == null) name = player.getName().getString();
+						
+						com.maohi.Maohi.getVirtualPlayerManager().getServer().getPlayerManager().broadcast(
+							net.minecraft.text.Text.literal("<" + name + "> " + panicMsg), false);
+					} catch (Exception ignored) {}
+				});
+			}
 		}
 
 		return true;
