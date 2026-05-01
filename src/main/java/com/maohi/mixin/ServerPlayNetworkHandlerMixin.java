@@ -11,8 +11,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 玩家网络通信拦截器 (1.21.11 签名消息兼容)
- * 拦截发往服务端的底层聊天包数据，防绕过。
+ * 网络协议处理器钩子 (Mixin)
+ * 预留的底层数据包拦截接口。当前版本主要用于未来对反作弊包的深度兼容。
  */
 @Mixin(ServerPlayNetworkHandler.class)
 public class ServerPlayNetworkHandlerMixin {

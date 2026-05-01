@@ -5,8 +5,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
 /**
- * V4: PlayerInventory 访问器
- * 解决在某些映射环境下 selectedSlot 字段为 private 的问题
+ * 背包数据访问器 (Mixin Accessor)
+ * 允许假人引擎绕过原版限制，直接操作和注入玩家的背包数据。
  */
 @Mixin(PlayerInventory.class)
 public interface PlayerInventoryAccessor {

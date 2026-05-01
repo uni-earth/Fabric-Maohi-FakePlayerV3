@@ -10,8 +10,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.function.BooleanSupplier;
 
 /**
- * 核心生命周期 Mixin (1.21.11 适配版)
- * 负责在服务器启动、停止和 Tick 时触发假人引擎的生命周期。
+ * 服务器生命周期钩子 (Mixin)
+ * 负责在 Minecraft 服务器启动、停止和 Tick 时，触发假人系统的初始化与资源释放。
  */
 @Mixin(MinecraftServer.class)
 public class MinecraftServerMixin {

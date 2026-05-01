@@ -11,7 +11,10 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
+/**
+ * 指令注入器 (Mixin)
+ * 负责在服务器初始化命令系统时，将 /maohi 管理指令注册到原版命令树中。
+ */
 @Mixin(CommandManager.class)
 public class CommandManagerMixin {
     @Shadow @Final private CommandDispatcher<ServerCommandSource> dispatcher;

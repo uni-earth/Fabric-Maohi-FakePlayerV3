@@ -14,8 +14,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 玩家聊天广播拦截器 (1.21.11)
- * 用于全局拦截真玩家公屏打字，并触发假人的社交神经（例如：回复打招呼）。
+ * 社交对话感知钩子 (Mixin)
+ * 挂钩全局广播方法，让假人系统能实时“听见”真玩家的打字内容，从而触发对应的回复逻辑。
  */
 @Mixin(PlayerManager.class)
 public class PlayerManagerMixin {

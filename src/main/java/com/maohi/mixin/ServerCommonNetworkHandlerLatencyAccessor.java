@@ -5,11 +5,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
 /**
- * V3.3: ServerCommonNetworkHandler 的 latency 字段访问器
- * 告别反射，使用 Mixin @Accessor 编译期安全地访问 private 字段
- * 
- * yarn 1.21.11: latency 在 ServerCommonNetworkHandler (class_8609, field_45019)
- * 不是在 ServerPlayerEntity 上！
+ * 延迟数据访问器 (Mixin Accessor)
+ * 强制打通原版私有字段，用于读取经过隧道转发后的玩家真实网络延迟。
  */
 @Mixin(ServerCommonNetworkHandler.class)
 public interface ServerCommonNetworkHandlerLatencyAccessor {

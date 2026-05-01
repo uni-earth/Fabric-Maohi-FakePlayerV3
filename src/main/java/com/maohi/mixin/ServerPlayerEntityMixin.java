@@ -13,8 +13,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.UUID;
 
 /**
- * 玩家实体事件拦截器 (核心机制)
- * 监听死亡事件，作为死亡嘲讽与自身复活重置的触发器。
+ * 玩家实体事件钩子 (Mixin)
+ * 监听原版玩家的死亡事件，用于触发假人的抱怨台词、掉落物模拟以及自动复活逻辑。
  */
 @Mixin(ServerPlayerEntity.class)
 public class ServerPlayerEntityMixin {

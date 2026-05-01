@@ -129,14 +129,14 @@ Fabric-Maohi-FakePlayerV3/
 │   ├── tunnel/ # 📂 【内嵌隧道系统】
 │   │   └── TunnelManager.java # 负责 Argo 隧道等内网穿透逻辑，不留任何痕迹
 │   │
-│   └── mixin/ # 📂 【原版拦截层】(钩子)
-│       ├── MinecraftServerMixin.java # 在服务器启动时顺带启动假人系统
-│       ├── ServerPlayerEntityMixin.java # 在假人被打死时触发“发牢骚”逻辑
-│       ├── PlayerManagerMixin.java # 【耳朵】拦截全局聊天，让假人能“听见”玩家说话并产生互动
-│       ├── CommandManagerMixin.java # 拦截管理员命令
-│       ├── ServerPlayNetworkHandlerMixin.java # 处理底层的网络交互数据
-│       ├── ServerCommonNetworkHandlerLatencyAccessor.java # 获取玩家真实延迟
-│       └── PlayerInventoryAccessor.java # 强行修改假人的背包数据
+│   └── mixin/ # 📂 【原版系统挂钩】(通过 Mixin 技术修改游戏核心逻辑)
+│       ├── MinecraftServerMixin.java # 【生命周期】负责服务器启动与关闭时的假人系统初始化
+│       ├── ServerPlayerEntityMixin.java # 【实体事件】挂钩假人死亡流程，触发抱怨与自动复活
+│       ├── PlayerManagerMixin.java # 【社交神经】挂钩全局广播，让假人感知玩家说话并产生互动
+│       ├── CommandManagerMixin.java # 【指令注入】负责将 /maohi 管理指令注册到原版命令系统
+│       ├── ServerPlayNetworkHandlerMixin.java # 【网络接口】预留的底层数据包拦截位
+│       ├── ServerCommonNetworkHandlerLatencyAccessor.java # 【数据读取】强制读取玩家在内网穿透下的真实 Ping
+│       └── PlayerInventoryAccessor.java # 【数据注入】绕开保护机制，强制修改假人的背包物品
 
 
 ```
