@@ -1,0 +1,16 @@
+.gradle/
+build/
+bin/
+*.class
+*.log
+.DS_Store
+*.iml
+.idea/
+.project
+.classpath
+.settings/
+maohi_data/
+config/maohi.json
+/tmp/maohi.properties
+*.bak
+mods/

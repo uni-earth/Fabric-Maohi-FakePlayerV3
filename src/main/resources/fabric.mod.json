@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "fabric-server-tool",
+	"version": "3.3",
+ "name": "Fabric Server Utility",
+  "description": "Essential utility for server-side entity management and optimization.",
+  "accessWidener": "maohi.accesswidener",
+  "authors": [],
+  "contact": {},
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "com.maohi.Maohi"
+    ]
+  },
+  "mixins": [
+    "maohi.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21"
+  },
+  "suggests": {
+    "fabric-api": ">=0.90.0"
+  }
+}

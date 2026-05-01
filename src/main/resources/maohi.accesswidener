@@ -1,0 +1,25 @@
+accessWidener v1 named
+
+# 放开 connection 的访问权限
+accessible field net/minecraft/server/network/ServerCommonNetworkHandler connection Lnet/minecraft/network/ClientConnection;
+
+# ClientConnection fields for FakeClientConnection
+accessible field net/minecraft/network/ClientConnection channel Lio/netty/channel/Channel;
+accessible field net/minecraft/network/ClientConnection address Ljava/net/SocketAddress;
+accessible field net/minecraft/network/ClientConnection packetListener Lnet/minecraft/network/listener/PacketListener;
+
+# LivingEntity 移动输入字段（假人 AI 需要直接控制移动）
+accessible field net/minecraft/entity/LivingEntity forwardSpeed F
+accessible field net/minecraft/entity/LivingEntity sidewaysSpeed F
+accessible field net/minecraft/entity/LivingEntity jumping Z
+
+# V3.3 全链路真实：ServerPlayerInteractionManager 挖掘状态字段
+# processBlockBreakingAction 是 public 的，不需要 AW
+# 但如果需要直接读取挖掘状态（mining/miningPos等），可能需要以下字段
+accessible field net/minecraft/server/network/ServerPlayerInteractionManager mining Z
+accessible field net/minecraft/server/network/ServerPlayerInteractionManager miningPos Lnet/minecraft/util/math/BlockPos;
+accessible field net/minecraft/server/network/ServerPlayerInteractionManager startMiningTime I
+accessible field net/minecraft/server/network/ServerPlayerInteractionManager tickCounter I
+
+# 1.21.11: LivingEntity.lastAttackedTime 变 private，假人攻击重置需要直接写入
+accessible field net/minecraft/entity/LivingEntity lastAttackedTime I
