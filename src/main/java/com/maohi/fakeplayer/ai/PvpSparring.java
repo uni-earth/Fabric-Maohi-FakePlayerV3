@@ -92,7 +92,7 @@ public class PvpSparring {
 	}
 
 	private static void handleSparring(ServerPlayerEntity player, VirtualPlayerManager.Personality personality, long tickNow) {
-		ServerPlayerEntity target = player.getServer().getPlayerManager().getPlayer(personality.sparringTarget);
+		ServerPlayerEntity target = Maohi.getVirtualPlayerManager().getServer().getPlayerManager().getPlayer(personality.sparringTarget);
 
 		// ★ 终止条件检查
 		// 1. 超时 (切磋最长持续 20 秒 = 400 tick)
@@ -140,7 +140,7 @@ public class PvpSparring {
 	private static void endSparring(ServerPlayerEntity player, VirtualPlayerManager.Personality personality, boolean isLoser) {
 		personality.isSparring = false;
 		
-		ServerPlayerEntity target = player.getServer().getPlayerManager().getPlayer(personality.sparringTarget);
+		ServerPlayerEntity target = Maohi.getVirtualPlayerManager().getServer().getPlayerManager().getPlayer(personality.sparringTarget);
 		personality.sparringTarget = null;
 		
 		// 通知对方也停止

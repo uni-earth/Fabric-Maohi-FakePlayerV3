@@ -9,7 +9,8 @@
 		"PlayerManagerMixin",
 		"ServerPlayNetworkHandlerMixin",
 		"ServerPlayerEntityMixin",
-		"ServerCommonNetworkHandlerLatencyAccessor"
+		"ServerCommonNetworkHandlerLatencyAccessor",
+		"PlayerInventoryAccessor"
 	],
   "injectors": {
     "defaultRequire": 1

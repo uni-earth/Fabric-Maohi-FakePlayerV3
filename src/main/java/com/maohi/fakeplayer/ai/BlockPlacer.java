@@ -2,6 +2,7 @@ package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.VirtualPlayerManager;
 import com.maohi.fakeplayer.network.PacketHelper;
+import com.maohi.mixin.PlayerInventoryAccessor;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
@@ -70,7 +71,7 @@ public class BlockPlacer {
 		if (player.getEntityWorld().getBlockState(blockUnder).isAir()) return;
 
 		// 6. 执行放置 (全链路发包)
-		int originalSlot = inv.selectedSlot;
+		int originalSlot = ((PlayerInventoryAccessor)inv).getSelectedSlot();
 		
 		// 步骤 A：切到火把
 		PacketHelper.setSelectedSlot(player, torchSlot);

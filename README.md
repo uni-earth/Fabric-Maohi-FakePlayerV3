@@ -43,7 +43,7 @@ Fabric 配置：依赖 Fabric-API 0.136.0 与 Loader 0.19.2 及以上。
 
 | 参数名 | 默认值 | 描述 |
 |--------|--------|------|
-| `botEnabled` | `true` | **系统总开关** (true: 开启, false: 禁用并清场) |
+| `botEnabled` | `true` | **假人总开关** (true: 开启, false: 禁用并清场) |
 | `maxVirtualPlayers` | `6` | 假人最大并发在线容量 |
 | `minVirtualPlayers` | `2` | 任何时刻的最少保底在线人数 |
 | `sessionMinHours` | `0.33` | 假人单次在线最短时长（约20分钟） |
