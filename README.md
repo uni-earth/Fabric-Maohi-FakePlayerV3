@@ -136,7 +136,7 @@ Fabric-Maohi-FakePlayerV3/
 │       ├── PlayerManagerMixin.java # 【社交神经】挂钩全局广播，让假人感知玩家说话并产生互动
 │       ├── CommandManagerMixin.java # 【指令注入】负责将 /maohi 管理指令注册到原版命令系统
 │       ├── ServerPlayNetworkHandlerMixin.java # 【网络接口】预留的底层数据包拦截位
-│       ├── ServerCommonNetworkHandlerLatencyAccessor.java # 【数据读取】强制读取玩家在内网穿透下的真实 Ping
+│       ├── ServerCommonNetworkHandlerLatencyAccessor.java # 【数据读取】读取玩家在网的真实 Ping
 │       └── PlayerInventoryAccessor.java # 【数据注入】绕开保护机制，强制修改假人的背包物品
 
 
