@@ -284,7 +284,7 @@ public class SurvivalMechanics {
 				// 获取药水组件数据
 				net.minecraft.component.type.PotionContentsComponent contents = stack.get(net.minecraft.component.DataComponentTypes.POTION_CONTENTS);
 				if (contents != null && contents.potion().isPresent()) {
-					String potionId = contents.potion().get().value().finishType().toString();
+					String potionId = contents.potion().get().getIdAsString();
 					// 只喝治疗或强效治疗药水
 					if (potionId.contains("healing")) {
 						return i;
