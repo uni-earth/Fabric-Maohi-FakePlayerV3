@@ -106,13 +106,13 @@ Fabric-Maohi-FakePlayerV3/
 │   │   │   └── PacketHelper.java # 负责把假人的动作（挥手、走路）转换成真实数据包
 │   │   │
 │   │   ├── ai/ # 📂 【假人行为 AI】
-│   │   │   ├── MovementController.java # 负责让假人走出人类那种弯弯曲曲的步态(S形位移)
-│   │   │   ├── PathfindingNavigation.java # 负责让假人绕开坑洞和墙壁，不撞墙
-│   │   │   ├── SurvivalMechanics.java # 负责让假人像人一样求生（没血了喝药、被打还手）
-│   │   │   ├── CombatReflex.java # 负责让假人害怕苦力怕（感应到炸弹就瞬移逃跑）
-│   │   │   ├── InventorySimulator.java # 负责往假人背包里塞“垃圾”，模拟真实挖矿所得
-│   │   │   ├── ActionSimulator.java # 负责让假人“多动”（没事低个头、挖个方块、挥挥手）
-│   │   │   ├── BlockPlacer.java # 负责让假人在黑矿洞里自动插火把照亮
+│   │   │   ├── MovementController.java # 负责人类步态(S形位移)与物理跳跃起跳控制
+│   │   │   ├── PathfindingNavigation.java # 负责危险规避、路径规划与跳跃避障检测
+│   │   │   ├── SurvivalMechanics.java # 负责生存求生、熟练度成长与【全链路隐身合成】
+│   │   │   ├── CombatReflex.java # 负责危险感应(苦力怕)与【PVP 矢量预判攻击】
+│   │   │   ├── InventorySimulator.java # 负责背包物品沉淀，模拟真实生存战利品
+│   │   │   ├── ActionSimulator.java # 负责假人多动症模拟（随机挥手、看风景）
+│   │   │   ├── BlockPlacer.java # 负责自动插火把照明与合成台放置逻辑
 │   │   │   ├── PvpSparring.java # 负责让两个无聊的假人互相看对眼，发起切磋演戏
 │   │   │   ├── AchievementSimulator.java # 负责让假人随机“蹦成就”，迷惑管理员
 │   │   │   ├── AFKManager.java # 负责假人挂机行为（物理停顿 + 临走/归来时的礼貌告知）
