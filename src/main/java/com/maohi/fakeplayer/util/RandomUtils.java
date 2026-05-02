@@ -16,11 +16,11 @@ public final class RandomUtils {
 		"Justin", "Brandon", "Tyler", "Zach", "Jordan", "Caleb", "Mason", "Liam", "Noah", "Emma", "Olivia", "Ava"
 	};
 	private static final String[] ROOTS = {
-		"Magic", "Golden", "Shadow", "Dark", "Ghost", "Wild", "Cool", "Gamer", "Alpha", "Pro",
-		"Legend", "Miner", "Craft", "Hunter", "Panda",
-		"Mine", "PVP", "Sky", "Pixel", "Dragon", "Storm", "Frost", "Iron", "Gold"
+		"Shadow", "Golden", "Dark", "Ghost", "Wild", "Silent", "Brave",
+		"Miner", "Hunter", "Panda", "Sky", "Dragon", "Storm", "Frost", "Iron",
+		"Rusty", "Sleepy", "Lucky", "Tiny", "Sneaky", "Lazy", "Grumpy", "Clumsy"
 	};
-	private static final String[] SUFFIXES = {"_MC", "_PVP", "_YT", "_XD", "777", "99", "123", "2024", "X", "Pro"};
+	private static final String[] SUFFIXES = {"_MC", "_XD", "99", "123", "2024", "x", "gg", "_real", "hd"};
 	private static final String[] COMMON_POOL = {
 		"SwiftArcher", "DarkCrafter", "QuietMiner", "JollyBuilder", "FrostBane", "DesertMiner",
 		"StoneSmasher", "DiamondDigger", "NetherGuard", "OceanNavigator", "CreeperHunter",
