@@ -98,15 +98,10 @@ public class MaohiCommands {
     private static void registerCommands(CommandDispatcher<ServerCommandSource> dispatcher) {
         dispatcher.register(
             CommandManager.literal("maohi")
-		.requires(source -> {
-			// 1.21.11: hasPermissionLevel(int) 移除，改用 PermissionPredicate 系统
-			// 检查权限是否 >= ADMINS (原 level 4)
-			if (source.getPermissions() instanceof net.minecraft.command.permission.LeveledPermissionPredicate lpp) {
-				return lpp.getLevel().isAtLeast(net.minecraft.command.permission.PermissionLevel.ADMINS);
-			}
-			// 非标准权限源（如命令方块/函数），默认拒绝
-			return false;
-		})
+		// NOTE: 1.21.11 权限系统已重构，使用 requirePermissionLevel 是最稳健的写法
+		// 它内部自动处理 PermissionPredicate / PermissionLevel 兼容性
+		// 避免直接 instanceof LeveledPermissionPredicate（会因第三方权限插件失效）
+		.requires(CommandManager.requirePermissionLevel(4))
 
                 // /maohi status — 查看当前状态
                 .then(CommandManager.literal("status")

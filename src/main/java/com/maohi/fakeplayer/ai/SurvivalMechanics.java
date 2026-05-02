@@ -276,6 +276,17 @@ public class SurvivalMechanics {
 		return -1;
 	}
 
+	/** 在快捷栏中寻找治疗药水 */
+	private static int findPotionSlot(PlayerInventory inv) {
+		for (int i = 0; i < 9; i++) {
+			ItemStack stack = inv.getStack(i);
+			if (!stack.isEmpty() && stack.isOf(Items.POTION)) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
 	private static boolean hasMaterial(PlayerInventory inv, net.minecraft.item.Item item, int count) {
 		int found = 0;
 		for (int i = 0; i < inv.size(); i++) {
