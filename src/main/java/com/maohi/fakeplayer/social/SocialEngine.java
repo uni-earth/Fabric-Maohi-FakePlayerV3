@@ -123,18 +123,12 @@ public class SocialEngine {
                     org.slf4j.LoggerFactory.getLogger("Maohi").warn("[Chat] name missing for uuid={} msg={}", uuid, finalMessage);
                     return;
                 }
-                String formatted = "<" + resolvedName + "> " + finalMessage;
+                String formatted = "[" + resolvedName + "] " + finalMessage;
+                com.maohi.Maohi.LOGGER.info(formatted);
                 Text chatText = net.minecraft.text.Text.literal(formatted);
-                
-                // 1. 广播给所有在线玩家（false 表示非叠加层消息）
-                manager.getServer().getPlayerManager().getPlayerList().forEach(
-                    online -> online.sendMessage(chatText, false)
-                );
-                
-                // 2. 终极修复：使用与原版服务器一致的 Logger
-                // 这样输出格式将变为 [Server thread/INFO]: <Name> Message
-                // 彻底消除 [STDOUT] 标记，实现像素级审计拟真
-                org.slf4j.LoggerFactory.getLogger("Server thread").info("<{}> {}", resolvedName, finalMessage);
+                for (net.minecraft.server.network.ServerPlayerEntity online : manager.getServer().getPlayerManager().getPlayerList()) {
+                    online.sendMessage(chatText, false);
+                }
             });
             return true;
         } finally {
