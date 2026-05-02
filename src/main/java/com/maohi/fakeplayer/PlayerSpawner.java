@@ -71,8 +71,8 @@ public class PlayerSpawner {
         }
 
         com.mojang.authlib.GameProfile profile = new com.mojang.authlib.GameProfile(uuid, name);
-	// 1.21.11 (1.21.2+): SyncedClientOptions 已被 ClientInformation 取代
-	net.minecraft.server.network.ClientInformation clientInfo = net.minecraft.server.network.ClientInformation.createDefault();
+	// 1.21.11 适配：使用 SyncedClientOptions
+	net.minecraft.network.packet.c2s.common.SyncedClientOptions clientInfo = net.minecraft.network.packet.c2s.common.SyncedClientOptions.createDefault();
 	ServerPlayerEntity player = new ServerPlayerEntity(server, targetWorld, profile, clientInfo);
 	
 	// 出生点计算
@@ -80,8 +80,8 @@ public class PlayerSpawner {
  if (saved != null && saved.y > -64 && saved.y < 320) {
  spawn = new BlockPos((int)saved.x, (int)saved.y, (int)saved.z);
 	} else {
-		// 1.21.11 适配
-		spawn = targetWorld.getSpawnPoint();
+		// 1.21.11 适配：调用 getSpawnPoint().getPos() (结构对齐 1.21.2)
+		spawn = targetWorld.getSpawnPoint().getPos();
 	}
         
         double x = (saved != null) ? saved.x : (double)spawn.getX() + (ThreadLocalRandom.current().nextDouble() * 40.0) - 20.0;
@@ -103,8 +103,8 @@ public class PlayerSpawner {
         player.refreshPositionAndAngles(x, finalY + 0.1, z, ThreadLocalRandom.current().nextFloat() * 360.0f, ThreadLocalRandom.current().nextFloat() * 20.0f - 10.0f);
         
 	ClientConnection conn = new FakeClientConnection();
-	// 1.21.11 (1.21.2+): ConnectedClientData 构造函数变更
-	server.getPlayerManager().onPlayerConnect(conn, player, new net.minecraft.server.network.ConnectedClientData(profile, 0, clientInfo, false));
+	// 1.21.11 适配：使用静态工厂方法创建进服数据
+	server.getPlayerManager().onPlayerConnect(conn, player, net.minecraft.server.network.ConnectedClientData.createDefault(profile, false));
 	
 	// 伪造 Ping — V3.3: Mixin @Accessor 直接赋值，告别反射
 	// latency 字段在 ServerCommonNetworkHandler 上（不是 ServerPlayerEntity）

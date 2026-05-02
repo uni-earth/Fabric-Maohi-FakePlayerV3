@@ -80,13 +80,13 @@ public class VirtualPlayerManager {
 	if (sp.name.startsWith("V_")) {
 		long seed = config().nodeUuid.hashCode() + sp.uuid.hashCode();
 		String oldName = sp.name;
-		// m6 fix: 使用 RandomUtils 统一重命名逻辑，消除重复代码
 		sp.name = com.maohi.fakeplayer.util.RandomUtils.renameVPlayer(seed);
-		// 2.70 索引同步：清理旧名，建立新连接
 		nameToUuidIndex.remove(oldName);
 		nameToUuidIndex.put(sp.name, sp.uuid);
 		dataDirty = true;
 	}
+	// 1.21.11 拟真增强：加载成就列表并标记，防止重复广播
+	if (sp.unlockedAdvancements == null) sp.unlockedAdvancements = new java.util.concurrent.CopyOnWriteArrayList<>();
 	});
         if (dataDirty) saveData();
 	managerThread = new Thread(this::manageLoop, "Worker-1");
@@ -1054,6 +1054,7 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
 	public static class SavedPlayer {
 		public volatile UUID uuid; public volatile String name; public volatile Personality personality; public volatile long totalPlaytime;
 		public volatile double x, y, z; public volatile String dimension;
+		public java.util.List<String> unlockedAdvancements = new java.util.ArrayList<>();
 		public SavedPlayer() {} // 2.78 Gson 兼容构造
 		public SavedPlayer(UUID u, String n, Personality p) { this.uuid = u; this.name = n; this.personality = p; }
 	}
