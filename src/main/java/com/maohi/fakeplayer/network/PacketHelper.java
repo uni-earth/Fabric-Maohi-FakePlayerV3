@@ -62,8 +62,8 @@ public class PacketHelper {
         player.networkHandler.onHandSwing(new HandSwingC2SPacket(Hand.MAIN_HAND));
 
         // 4. 重置攻击冷却（模拟真人的攻击节奏）
-        // 1.21.11 (1.21.2) 适配：原 lastAttackedTime 字段已不再用于驱动冷却，改用原生方法
-        player.resetLastAttackedTicks();
+        // 1.21.11 适配：官方原生方法名为 resetTicksSinceLastAttack
+        player.resetTicksSinceLastAttack();
 
         // 5. 挥手动画（让周围玩家看到）
         player.swingHand(Hand.MAIN_HAND, true);
