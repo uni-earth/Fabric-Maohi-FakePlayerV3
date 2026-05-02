@@ -375,8 +375,11 @@ prepareAndSpawnVirtualPlayer();
 
 			com.maohi.fakeplayer.ai.SurvivalMechanics.handleSurvival(p, personality);
 			com.maohi.fakeplayer.ai.SurvivalMechanics.autoEquipArmor(p);
-			com.maohi.fakeplayer.ai.SurvivalMechanics.autoUpgradeTools(p);
-			// V5.1 驱动合成状态机
+			if (detectPhase(p) == GrowthPhase.STONE_AGE) {
+				com.maohi.fakeplayer.ai.SurvivalMechanics.autoCraftStoneTools(p);
+			} else {
+				com.maohi.fakeplayer.ai.SurvivalMechanics.autoUpgradeTools(p);
+			}
 			com.maohi.fakeplayer.ai.SurvivalMechanics.tickCrafting(p, personality);
 
 			// V4.1 社交增强：感知周围的真实玩家
@@ -657,8 +660,10 @@ if (personality.taskTarget != null) {
 	else maxRadius = 8;
 	if (radius > maxRadius) radius = maxRadius;
 	BlockPos result = null;
+	int yMin = type.contains("ore") ? Math.max(-64, pos.getY() - 60) - pos.getY() : -2;
+	int yMax = type.contains("ore") ? 2 : 2;
 	for (int x = -radius; x <= radius && result == null; x++)
-		for (int y = -2; y <= 2 && result == null; y++)
+		for (int y = yMin; y <= yMax && result == null; y++)
 			for (int z = -radius; z <= radius && result == null; z++) {
 				BlockPos p = pos.add(x, y, z);
 				if (net.minecraft.registry.Registries.BLOCK.getId(world.getBlockState(p).getBlock()).getPath().contains(type)) result = p;
@@ -976,60 +981,27 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
         return true;
     }
 
-    /**
-     * 随机分配任务给假人
-     * MINING 35% / WOODCUTTING 30% / HUNTING 15% / EXPLORING 20%
-     */
     private void assignRandomTask(ServerPlayerEntity player, Personality personality) {
-        // V4.4 职业偏好逻辑：如果有职业偏好，80% 概率遵循偏好
-        TaskType selectedType = null;
-        if (personality.jobFocus != null && ThreadLocalRandom.current().nextInt(100) < 80) {
-            selectedType = personality.jobFocus;
+        GrowthPhase phase = detectPhase(player);
+        switch (phase) {
+            case STONE_AGE -> com.maohi.fakeplayer.ai.phase.PhaseStoneAge.assignTask(player, personality,
+                (world, pos) -> findNearestBlock(world, pos, 20, "log"));
+            case IRON_AGE -> com.maohi.fakeplayer.ai.phase.PhaseIronAge.assignTask(player, personality,
+                (world, pos) -> findNearestBlock(world, pos, 20, "ore"),
+                (world, pos) -> findNearestBlock(world, pos, 20, "log"),
+                () -> findHuntTarget(player));
+            case DIAMOND_AGE -> com.maohi.fakeplayer.ai.phase.PhaseDiamondAge.assignTask(player, personality,
+                (world, pos) -> findNearestBlock(world, pos, 20, "ore"),
+                (world, pos) -> findNearestBlock(world, pos, 20, "log"),
+                () -> findHuntTarget(player));
+            case NETHER -> com.maohi.fakeplayer.ai.phase.PhaseNether.assignTask(player, personality,
+                (world, pos) -> findNearestBlock(world, pos, 20, "ore"),
+                () -> findHuntTarget(player));
+            case ENDGAME -> com.maohi.fakeplayer.ai.phase.PhaseEnderDragon.assignTask(player, personality,
+                () -> findHuntTarget(player));
         }
-
-        int roll = ThreadLocalRandom.current().nextInt(100);
-        if (selectedType == TaskType.MINING || (selectedType == null && roll < 35)) {
-            // 挖矿任务逻辑 (保持不变但根据 jobFocus 触发)
-            if (personality.jobFocus == null && roll < 15) personality.jobFocus = TaskType.MINING; // 产生偏好
-            BlockPos target = findNearestBlock(player.getEntityWorld(), player.getBlockPos(), 20, "ore");
-            if (target == null) {
-                BlockPos below = player.getBlockPos().down(player.getBlockY() - 5);
-                target = new BlockPos(below.getX(), Math.max(5, below.getY()), below.getZ());
-            }
-            personality.currentTask = TaskType.MINING;
-            personality.taskTarget = target;
-            personality.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_WORK;
-            return;
-        }
-
-        if (roll < 65) {
-            BlockPos target = findNearestBlock(player.getEntityWorld(), player.getBlockPos(), 20, "log");
-            if (target == null) {
-                target = player.getBlockPos().add(ThreadLocalRandom.current().nextInt(60) - 30, 0, ThreadLocalRandom.current().nextInt(60) - 30);
-            }
-            personality.currentTask = TaskType.WOODCUTTING;
-            personality.taskTarget = target;
-            personality.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_WORK;
-            return;
-        }
-
-        if (roll < 80) {
-            // 15%: 猎杀任务 - 寻找等级匹配的怪物
-            net.minecraft.entity.mob.HostileEntity huntTarget = findHuntTarget(player);
-            if (huntTarget != null) {
-                personality.currentTask = TaskType.HUNTING;
-                personality.taskTarget = huntTarget.getBlockPos();
-                personality.huntTargetUuid = huntTarget.getUuid();
-                personality.taskExpireTime = System.currentTimeMillis() + 30_000L;
-                return;
-            }
-        }
-
-        // 20%: 探索
-        personality.currentTask = TaskType.EXPLORING;
-        personality.taskTarget = player.getBlockPos().add(ThreadLocalRandom.current().nextInt(60) - 30, 0, ThreadLocalRandom.current().nextInt(60) - 30);
-        personality.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_EXPLORE;
     }
+
 
     public boolean kickNamedPlayer(String name) {
         for (Map.Entry<UUID, String> entry : virtualPlayerNames.entrySet()) {
@@ -1149,6 +1121,33 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
 	}
 
 	public enum TaskType { IDLE, EXPLORING, WOODCUTTING, MINING, COLLECTING, AFK, RECONNECTING, HUNTING, CRAFTING }
+
+	/** 成长阶段：按背包装备自动判断，无需手动设置 */
+	public enum GrowthPhase {
+		STONE_AGE,    // 石器时代：有石器，目标铁矿
+		IRON_AGE,     // 铁器时代：有铁器，目标钻石
+		DIAMOND_AGE,  // 钻石时代：有钻石装备，目标下界
+		NETHER,       // 下界远征：有下界合金，目标末影龙
+		ENDGAME       // 挑战末影龙
+	}
+
+    /** 根据背包装备判断当前成长阶段 */
+    private static GrowthPhase detectPhase(ServerPlayerEntity player) {
+        net.minecraft.entity.player.PlayerInventory inv = player.getInventory();
+        boolean hasNetheriteGear = false, hasDiamondGear = false, hasIronGear = false, hasStoneGear = false;
+        for (int i = 0; i < inv.size(); i++) {
+            net.minecraft.item.Item item = inv.getStack(i).getItem();
+            String id = net.minecraft.registry.Registries.ITEM.getId(item).getPath();
+            if (id.startsWith("netherite_")) hasNetheriteGear = true;
+            else if (id.startsWith("diamond_")) hasDiamondGear = true;
+            else if (id.startsWith("iron_")) hasIronGear = true;
+            else if (id.startsWith("stone_")) hasStoneGear = true;
+        }
+        if (hasNetheriteGear) return GrowthPhase.NETHER;
+        if (hasDiamondGear) return GrowthPhase.DIAMOND_AGE;
+        if (hasIronGear) return GrowthPhase.IRON_AGE;
+        return GrowthPhase.STONE_AGE; // 默认：石器时代（含木器/无装备）
+    }
 
     private String randomFrom(String[] array) {
         if (array == null || array.length == 0) return null;

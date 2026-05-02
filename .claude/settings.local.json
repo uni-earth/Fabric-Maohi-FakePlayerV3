@@ -9,7 +9,11 @@
       "WebFetch(domain:github.com)",
       "Bash(gradlew compileJava)",
       "Read(//mnt/e/Geminicli/**)",
-      "Bash(./gradlew compileJava)"
+      "Bash(./gradlew compileJava)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(grep -v \"^\\\\\\(+\\\\|-\\\\\\)\\\\s*\\\\*\\\\|^\\\\\\(+\\\\|-\\\\\\)\\\\s*/\\\\*\\\\|^\\\\\\(+\\\\|-\\\\\\)\\\\s*$\")"
     ]
   }
 }

@@ -154,7 +154,37 @@ public class SurvivalMechanics {
 		}
 	}
 
-	/** 
+	/**
+	 * 石器时代初始合成：圆石够了就合成镐+剑+斧三件套
+	 */
+	public static void autoCraftStoneTools(ServerPlayerEntity player) {
+		com.maohi.fakeplayer.VirtualPlayerManager.Personality pers = com.maohi.fakeplayer.VirtualPlayerManager.Personality.get(player);
+		if (pers == null || pers.currentTask == com.maohi.fakeplayer.VirtualPlayerManager.TaskType.CRAFTING) return;
+
+		PlayerInventory inv = player.getInventory();
+		boolean hasPickaxe = false, hasSword = false, hasAxe = false;
+		for (int i = 0; i < inv.size(); i++) {
+			String id = net.minecraft.registry.Registries.ITEM.getId(inv.getStack(i).getItem()).getPath();
+			if (id.contains("pickaxe")) hasPickaxe = true;
+			if (id.contains("sword")) hasSword = true;
+			if (id.contains("axe") && !id.contains("pickaxe")) hasAxe = true;
+		}
+
+		// 按优先级：镐 > 剑 > 斧，有圆石就合成缺的那件
+		net.minecraft.item.Item target = null;
+		net.minecraft.item.Item material = Items.COBBLESTONE;
+		int needed = 3;
+		if (!hasPickaxe && hasMaterial(inv, material, needed)) target = Items.STONE_PICKAXE;
+		else if (!hasSword && hasMaterial(inv, material, needed)) target = Items.STONE_SWORD;
+		else if (!hasAxe && hasMaterial(inv, material, needed)) target = Items.STONE_AXE;
+
+		if (target == null) return;
+		pers.currentTask = com.maohi.fakeplayer.VirtualPlayerManager.TaskType.CRAFTING;
+		pers.craftingTarget = target;
+		pers.craftingTicks = 40 + ThreadLocalRandom.current().nextInt(20);
+	}
+
+	/**
 	 * 自动升级工具 (V5.1)：触发合成状态机
 	 */
 	public static void autoUpgradeTools(ServerPlayerEntity player) {
@@ -206,21 +236,30 @@ public class SurvivalMechanics {
 			// 3. 最终结算
 			if (pers.craftingTicks == 0 && pers.craftingTarget != null) {
 				PlayerInventory inv = player.getInventory();
+				net.minecraft.item.Item target = pers.craftingTarget;
+				// 判断材料类型
+				net.minecraft.item.Item material;
 				int materialCount = 3;
-				net.minecraft.item.Item material = (pers.craftingTarget == Items.DIAMOND_PICKAXE) ? Items.DIAMOND : Items.IRON_INGOT;
-				
+				if (target == Items.DIAMOND_PICKAXE) { material = Items.DIAMOND; }
+				else if (target == Items.STONE_PICKAXE || target == Items.STONE_SWORD || target == Items.STONE_AXE) { material = Items.COBBLESTONE; }
+				else { material = Items.IRON_INGOT; }
+
 				if (hasMaterial(inv, material, materialCount)) {
 					consumeMaterial(inv, material, materialCount);
-					// 找到要替换的旧工具槽位
-					for (int i = 0; i < 9; i++) {
-						ItemStack s = inv.getStack(i);
-						if (!s.isEmpty() && (s.getItem() == Items.STONE_PICKAXE || s.getItem() == Items.IRON_PICKAXE || s.getItem() == Items.STONE_AXE)) {
-							inv.setStack(i, new ItemStack(pers.craftingTarget));
-							break;
+					// 石器：直接放入背包空槽；升级工具：替换旧工具
+					boolean placed = false;
+					if (target == Items.STONE_PICKAXE || target == Items.STONE_SWORD || target == Items.STONE_AXE) {
+						int slot = inv.getEmptySlot();
+						if (slot != -1) { inv.setStack(slot, new ItemStack(target)); placed = true; }
+					} else {
+						for (int i = 0; i < 9; i++) {
+							ItemStack s = inv.getStack(i);
+							if (!s.isEmpty() && (s.getItem() == Items.STONE_PICKAXE || s.getItem() == Items.IRON_PICKAXE || s.getItem() == Items.STONE_AXE)) {
+								inv.setStack(i, new ItemStack(target)); placed = true; break;
+							}
 						}
 					}
-					// 播放合成成功音效 (广播给周围所有人)
-					player.getEntityWorld().playSound(null, player.getX(), player.getY(), player.getZ(), 
+					if (placed) player.getEntityWorld().playSound(null, player.getX(), player.getY(), player.getZ(),
 						net.minecraft.sound.SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, net.minecraft.sound.SoundCategory.PLAYERS, 0.5f, 1.0f);
 				}
 				
