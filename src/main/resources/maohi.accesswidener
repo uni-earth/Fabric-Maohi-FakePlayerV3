@@ -13,13 +13,8 @@ accessible field net/minecraft/entity/LivingEntity forwardSpeed F
 accessible field net/minecraft/entity/LivingEntity sidewaysSpeed F
 accessible field net/minecraft/entity/LivingEntity jumping Z
 
-# V3.3 全链路真实：ServerPlayerInteractionManager 挖掘状态字段
-# processBlockBreakingAction 是 public 的，不需要 AW
-# 但如果需要直接读取挖掘状态（mining/miningPos等），可能需要以下字段
-accessible field net/minecraft/server/network/ServerPlayerInteractionManager mining Z
-accessible field net/minecraft/server/network/ServerPlayerInteractionManager miningPos Lnet/minecraft/util/math/BlockPos;
-accessible field net/minecraft/server/network/ServerPlayerInteractionManager startMiningTime I
-accessible field net/minecraft/server/network/ServerPlayerInteractionManager tickCounter I
-
-# 1.21.11: LivingEntity.lastAttackedTime 变 private，假人攻击重置需要直接写入
-accessible field net/minecraft/entity/LivingEntity lastAttackedTime I
+# NOTE: 以下字段在 1.21.11 中已被移除或迁移至匿名内部类，无法通过 AW 打开
+# ServerPlayerInteractionManager 的 mining/miningPos/startMiningTime/tickCounter
+# 已迁移至内部状态机，通过 processBlockBreakingAction 公开方法访问即可
+# LivingEntity.lastAttackedTime 在 1.21.11 中被移除
+# 替代方案：使用 player.resetLastAttackedTicks() 方法（已在 PacketHelper 中更新）
