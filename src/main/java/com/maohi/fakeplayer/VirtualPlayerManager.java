@@ -876,6 +876,9 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
 		public boolean hasMinedDiamondOre = false; // 是否真正挖到过钻石矿，用来限制 Diamonds! 成就
 		public long lastDiamondOreMinedAt = 0L;
 
+		// V5.5: 初始物资注入标记，防止重复发放
+		public boolean initialLootInjected = false;
+
 		/** 根据 ServerPlayerEntity 获取对应 Personality（供 CombatReflex 等外部模块调用） */
 		public static Personality get(ServerPlayerEntity player) {
 			if (player == null) return null;

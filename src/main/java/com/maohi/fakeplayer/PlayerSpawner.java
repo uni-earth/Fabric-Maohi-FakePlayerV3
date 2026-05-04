@@ -133,7 +133,12 @@ public class PlayerSpawner {
 			try { Thread.sleep(5000); } catch (InterruptedException ignored) {}
 			server.execute(() -> {
 				if (player.isAlive()) {
-					com.maohi.fakeplayer.ai.InventorySimulator.injectRealisticLoot(player);
+					// V5.5 加固：获取当前个性能记录
+					VirtualPlayerManager.Personality personality = manager.getPersonality(player.getUuid());
+					// 只有【新生成的假人】且【从未注入过物资】时才允许下发
+					if (saved == null && personality != null && !personality.initialLootInjected) {
+						com.maohi.fakeplayer.ai.InventorySimulator.injectRealisticLoot(player, personality);
+					}
 				}
 			});
 		}, "Loot-Delay").start();

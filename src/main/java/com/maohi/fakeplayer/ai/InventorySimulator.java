@@ -44,7 +44,8 @@ public class InventorySimulator {
 	 * 这是已知权衡——新号首次进服无法走 ItemEntity 拾取（没有来源实体）。
 	 * 长期方案：模拟地面掉落 → onPlayerCollision 拾取（待 Phase C 评估）。
 	 */
-	public static void injectRealisticLoot(ServerPlayerEntity player) {
+	public static void injectRealisticLoot(ServerPlayerEntity player, VirtualPlayerManager.Personality personality) {
+		if (personality != null && personality.initialLootInjected) return;
 		// 如果背包里已经有东西了（可能是读取了以前的存档），就不全盘覆盖，只在后面追加
 		if (!player.getInventory().isEmpty()) return;
 
@@ -123,6 +124,9 @@ public class InventorySimulator {
 			}
 
 			player.getInventory().setStack(slot, stack);
+		}
+		if (personality != null) {
+			personality.initialLootInjected = true;
 		}
 	}
 

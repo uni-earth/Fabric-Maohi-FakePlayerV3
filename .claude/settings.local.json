@@ -17,7 +17,8 @@
       "Bash(grep -E \"\\\\.java$\")",
       "Bash(./gradlew build *)",
       "Bash(java -version)",
-      "PowerShell(java -version)"
+      "PowerShell(java -version)",
+      "Bash(javac -version)"
     ]
   }
 }
