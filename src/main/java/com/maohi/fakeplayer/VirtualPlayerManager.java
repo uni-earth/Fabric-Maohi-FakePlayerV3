@@ -1041,11 +1041,52 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
 
         // 3. 单向棘轮：阶段只能向前，不会因死亡丢装备倒退（vanilla 成就也是单向）
         if (derived.ordinal() > personality.growthPhase.ordinal()) {
+            GrowthPhase oldPhase = personality.growthPhase;
             personality.growthPhase = derived;
             personality.phaseEnteredAt = System.currentTimeMillis();
             dataDirty = true;
+            // V5.18: 阶段跃迁时派发"下一阶段启动工具"（事件驱动，不再依赖时间+概率）
+            //        只派发"工具"而非"产物"，让假人通过真实行为产出最终物品（如黑曜石）
+            grantPhaseTransitionLoot(player, oldPhase, derived);
         }
         return personality.growthPhase;
+    }
+
+    /**
+     * V5.18: 阶段跃迁时派发"下一阶段启动工具"
+     * 仅在背包缺少关键工具时派发，避免重复发放。
+     * 派发的是"工具"（铁桶、打火石），假人需自己去舀岩浆、点火，触发的成就是真实做出来的。
+     */
+    private void grantPhaseTransitionLoot(ServerPlayerEntity player, GrowthPhase oldPhase, GrowthPhase newPhase) {
+        net.minecraft.entity.player.PlayerInventory inv = player.getInventory();
+        switch (newPhase) {
+            case IRON_AGE -> {
+                // 进入铁器时代：补 1 个空桶 + 1 个水桶（用于自制黑曜石/防火）
+                if (!hasItem(inv, net.minecraft.item.Items.BUCKET) && !hasItem(inv, net.minecraft.item.Items.WATER_BUCKET) && !hasItem(inv, net.minecraft.item.Items.LAVA_BUCKET)) {
+                    inv.offerOrDrop(new net.minecraft.item.ItemStack(net.minecraft.item.Items.BUCKET, 1));
+                }
+                if (!hasItem(inv, net.minecraft.item.Items.WATER_BUCKET)) {
+                    inv.offerOrDrop(new net.minecraft.item.ItemStack(net.minecraft.item.Items.WATER_BUCKET, 1));
+                }
+            }
+            case DIAMOND_AGE -> {
+                // 进入钻石时代：补打火石（如果没有）。黑曜石必须由假人自己 form_obsidian 真实产出。
+                if (!hasItem(inv, net.minecraft.item.Items.FLINT_AND_STEEL)) {
+                    inv.offerOrDrop(new net.minecraft.item.ItemStack(net.minecraft.item.Items.FLINT_AND_STEEL, 1));
+                }
+            }
+            case NETHER, ENDGAME -> {
+                // 已进入对应维度，无需启动工具兜底
+            }
+            default -> { /* STONE_AGE 是起点，不会作为目标 */ }
+        }
+    }
+
+    private static boolean hasItem(net.minecraft.entity.player.PlayerInventory inv, net.minecraft.item.Item item) {
+        for (int i = 0; i < inv.size(); i++) {
+            if (inv.getStack(i).isOf(item)) return true;
+        }
+        return false;
     }
 
     /** V5.17: 从背包推断成长阶段（仅在主世界使用） */
@@ -1105,6 +1146,11 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
         }
         com.maohi.fakeplayer.ai.SurvivalMechanics.tickCrafting(p, personality);
         com.maohi.fakeplayer.ai.SurvivalMechanics.tickSmelting(p, personality);
+
+        // V5.18: 真实行为里程碑触发器 — 通过执行真实游戏行为让 vanilla 自动触发成就
+        com.maohi.fakeplayer.ai.MilestoneActions.tryFillLavaBucket(p, personality);
+        com.maohi.fakeplayer.ai.MilestoneActions.tryThrowEnderEye(p, personality);
+        com.maohi.fakeplayer.ai.MilestoneActions.tryBreedAnimals(p, personality);
     }
 
     private void tickSocialAndPerception(ServerPlayerEntity p, Personality personality, UUID uuid, long tickNow) {
@@ -1229,7 +1275,7 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
     private void tickLifeSigns(ServerPlayerEntity p, Personality personality, UUID uuid, long tickNow, int logicTickCounter, boolean skipLowPriority) {
         // 1. 模拟生命特征：视轴抖动
         if (logicTickCounter % 20 == 0) {
-            if (ThreadLocalRandom.current().nextInt(100) < 5) { 
+            if (ThreadLocalRandom.current().nextInt(100) < 5) {
                 float newYaw = p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 2.0f - 1.0f);
                 float newPitch = p.getPitch() + (ThreadLocalRandom.current().nextFloat() * 2.0f - 1.0f);
                 server.execute(() -> {
@@ -1239,17 +1285,14 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
             }
         }
 
-        // 2. 成就模拟 — V5.17: 时间戳节流（30 秒一次），不依赖 totalTicks 对齐，也不被 skipLowPriority 阻断
-        long onlineMs = tickNow - loginTimes.getOrDefault(uuid, tickNow);
-        if (onlineMs > 180_000L && tickNow - personality.lastAchievementCheck >= 30_000L) {
+        // 2. V5.18: 同步 vanilla 真实成就进度到 personality.unlockedAdvancements
+        //    （30 秒一次节流，仅做"观察 + 抄写"，不再按时间+概率伪造广播）
+        if (tickNow - personality.lastAchievementCheck >= 30_000L) {
             personality.lastAchievementCheck = tickNow;
-            com.maohi.fakeplayer.ai.AchievementSimulator.tick(server, p, personality, onlineMs, () -> {
+            int newlyObserved = com.maohi.fakeplayer.ai.AchievementSimulator.syncFromVanilla(server, p, personality);
+            if (newlyObserved > 0) {
                 dataDirty = true;
-                if (ThreadLocalRandom.current().nextInt(100) < 30) {
-                    String[] brags = {"Look at this!", "Finally got it!", "pog", "easy", "did it!"};
-                    socialEngine.sendImmediateChat(uuid, brags[ThreadLocalRandom.current().nextInt(brags.length)], 5000L);
-                }
-            });
+            }
         }
     }
 

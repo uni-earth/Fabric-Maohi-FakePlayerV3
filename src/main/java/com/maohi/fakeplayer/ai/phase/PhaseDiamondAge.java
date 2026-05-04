@@ -1,10 +1,8 @@
 package com.maohi.fakeplayer.ai.phase;
 
 import com.maohi.fakeplayer.TimingConstants;
-import com.maohi.fakeplayer.VirtualPlayerManager;
 import com.maohi.fakeplayer.VirtualPlayerManager.Personality;
 import com.maohi.fakeplayer.VirtualPlayerManager.TaskType;
-import com.maohi.fakeplayer.ai.AchievementSimulator;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.server.network.ServerPlayerEntity;
