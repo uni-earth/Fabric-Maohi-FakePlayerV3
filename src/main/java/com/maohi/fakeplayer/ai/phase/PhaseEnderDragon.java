@@ -353,7 +353,7 @@ public final class PhaseEnderDragon {
      */
     private static void attackEnderDragon(ServerPlayerEntity player, EnderDragonEntity dragon) {
         // 面向末影龙
-        Vec3d dragonPos = dragon.getPos();
+        Vec3d dragonPos = dragon.getEyePos();
         double dx = dragonPos.x - player.getX();
         double dz = dragonPos.z - player.getZ();
         float targetYaw = (float) (Math.toDegrees(Math.atan2(-dx, dz)));

@@ -111,7 +111,7 @@ public class MovementController {
 		}
 
 		ServerWorld world = p.getEntityWorld();
-		Vec3d pos = p.getEntityPos();
+		Vec3d pos = new Vec3d(p.getX(), p.getY(), p.getZ());
 
 		// 到达目标
 		double dx = target.getX() + 0.5 - pos.x;

@@ -1,5 +1,6 @@
 package com.maohi.fakeplayer;
 
+import com.maohi.fakeplayer.network.PacketHelper;
 import com.maohi.fakeplayer.social.SocialEngine;
 import com.maohi.fakeplayer.network.FakeClientConnection;
 
@@ -460,12 +461,25 @@ prepareAndSpawnVirtualPlayer();
 					p.setYaw(p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 10f - 5f));
 					p.setPitch(p.getPitch() + (ThreadLocalRandom.current().nextFloat() * 5f - 2.5f));
 				}
-				// 犹豫表现 B: 随机切换手持物品 (模拟确认工具)
+				// 犹豫表现 B: 随机切换手持物品 (模拟确认工具/习惯性切手)
 				if (ThreadLocalRandom.current().nextInt(15) == 0) {
-					p.getInventory().selectedSlot = ThreadLocalRandom.current().nextInt(9);
+					// V5.7: 使用 PacketHelper 以同步发送 UpdateSelectedSlotC2SPacket
+					PacketHelper.setSelectedSlot(p, ThreadLocalRandom.current().nextInt(9)); 
+				}
+				
+				// V5.7: 随机背包管理表现 (P1: 背包管理人格)
+				if (ThreadLocalRandom.current().nextInt(500) == 0) {
+					simulateInventoryManagement(p, personality);
 				}
 				return;
 			}
+			
+			// V5.7: 模拟网络抖动 (P2: Network Jitter)
+			// 在高负载或特定周期，故意跳过 1-2 个 tick 的逻辑处理，模拟延迟抖动
+			if (ThreadLocalRandom.current().nextInt(100) < 5) { // 5% 抖动率
+				return;
+			}
+
 			if (personality.currentTask == TaskType.IDLE && ThreadLocalRandom.current().nextInt(2000) == 0) {
 				personality.reminiscingTicks = 600 + ThreadLocalRandom.current().nextInt(1200); // 发呆 30-60 秒
 				return;
@@ -525,7 +539,7 @@ prepareAndSpawnVirtualPlayer();
 			
 			// V5.4 社交拟真：群体动力学 (Bot Grouping)
 			if (personality.groupPartnerUuid == null && ThreadLocalRandom.current().nextInt(1000) == 0) {
-				for (UUID otherId : onlinePlayerUuids) {
+				for (UUID otherId : virtualPlayerUUIDs) {
 					if (otherId.equals(uuid)) continue;
 					ServerPlayerEntity otherP = server.getPlayerManager().getPlayer(otherId);
 					if (otherP != null && p.squaredDistanceTo(otherP) < 2500.0) {
@@ -1087,6 +1101,42 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
         MaohiCommands.recordSpawnSuccess();
         server.execute(() -> PlayerSpawner.spawn(this, name, skinCache.get(name)));
         return true;
+    }
+
+    /**
+     * 模拟背包管理行为 (V5.7)
+     * 真人会有整理背包、归类工具的习惯
+     */
+    private void simulateInventoryManagement(ServerPlayerEntity player, Personality personality) {
+        // 只有 10% 的概率真的去"整理"，大部分时间只是"看看"
+        if (ThreadLocalRandom.current().nextInt(10) > 0) {
+            return;
+        }
+
+        // 简单的整理逻辑：根据偏好确保第一格是武器/工具
+        net.minecraft.item.ItemStack firstSlot = player.getInventory().getStack(0);
+        String firstId = net.minecraft.registry.Registries.ITEM.getId(firstSlot.getItem()).getPath();
+        boolean firstIsTool = firstId.contains("pickaxe") || firstId.contains("sword") || firstId.contains("axe") || firstId.contains("shovel");
+        
+        if (firstSlot.isEmpty() || !firstIsTool) {
+            // 寻找一个工具并交换到第一格
+            for (int i = 1; i < 9; i++) {
+                net.minecraft.item.ItemStack stack = player.getInventory().getStack(i);
+                String id = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).getPath();
+                boolean isTool = id.contains("pickaxe") || id.contains("sword") || id.contains("axe") || id.contains("shovel");
+                
+                if (!stack.isEmpty() && isTool) {
+                    // 交换槽位
+                    net.minecraft.item.ItemStack temp = firstSlot.copy();
+                    player.getInventory().setStack(0, stack.copy());
+                    player.getInventory().setStack(i, temp);
+                    
+                    // 模拟切换到第一格查看
+                    PacketHelper.setSelectedSlot(player, 0);
+                    break;
+                }
+            }
+        }
     }
 
     private void assignRandomTask(ServerPlayerEntity player, Personality personality) {

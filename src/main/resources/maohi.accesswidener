@@ -13,6 +13,9 @@ accessible field net/minecraft/entity/LivingEntity forwardSpeed F
 accessible field net/minecraft/entity/LivingEntity sidewaysSpeed F
 accessible field net/minecraft/entity/LivingEntity jumping Z
 
+# 允许修改选中的快捷栏索引
+accessible field net/minecraft/entity/player/PlayerInventory selectedSlot I
+
 # NOTE: 以下字段在 1.21.11 中已被移除或迁移至匿名内部类，无法通过 AW 打开
 # ServerPlayerInteractionManager 的 mining/miningPos/startMiningTime/tickCounter
 # 已迁移至内部状态机，通过 processBlockBreakingAction 公开方法访问即可
