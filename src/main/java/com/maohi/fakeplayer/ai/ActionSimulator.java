@@ -228,12 +228,10 @@ public class ActionSimulator {
 
 		// 2. Shift 蹲起回礼 (Minecraft 国际通用友好信号)
 		if (real.isSneaking() && ThreadLocalRandom.current().nextInt(10) < 3) {
-			fake.setSneaking(true);
-			// 延迟一会再站起来
-			com.maohi.Maohi.getVirtualPlayerManager().getServer().execute(() -> {
-				try { Thread.sleep(200); } catch (Exception ignored) {}
-				fake.setSneaking(false);
-			});
+			com.maohi.fakeplayer.VirtualPlayerManager.Personality pers = com.maohi.fakeplayer.VirtualPlayerManager.Personality.get(fake);
+			if (pers != null) {
+				pers.sneakRemainingTicks = 4; // 延迟 4 tick 后自动站起
+			}
 		}
 	}
 

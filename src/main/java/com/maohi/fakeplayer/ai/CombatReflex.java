@@ -139,7 +139,8 @@ public class CombatReflex {
 		player.setSprinting(true);
 		player.forwardSpeed = 1.0f;
 		player.sidewaysSpeed = 0.0f;
-		player.travel(new Vec3d(0, 0, 1.0));
+		// 统一使用输入状态字段进行移动控制
+		player.travel(new net.minecraft.util.math.Vec3d(player.sidewaysSpeed, 0, player.forwardSpeed));
 
 		// 视线朝向逃跑方向
 		float fleeYaw = (float) (Math.toDegrees(Math.atan2(-rotatedX, rotatedZ)));

@@ -185,13 +185,7 @@ public class SocialEngine {
             if (nowMs - pers.lastNonVerbalTick > 60000 && ThreadLocalRandom.current().nextInt(100) < 40) {
                 pers.lastNonVerbalTick = nowMs;
                 final ServerPlayerEntity finalP = p;
-                manager.getServer().execute(() -> {
-                    finalP.setSneaking(true);
-                    manager.getServer().execute(() -> {
-                        try { Thread.sleep(200); } catch (Exception ignored) {}
-                        finalP.setSneaking(false);
-                    });
-                });
+                pers.sneakRemainingTicks = 4; // 延迟 4 tick (约 200ms) 后自动起身
             }
 
             // 2. 对视关注

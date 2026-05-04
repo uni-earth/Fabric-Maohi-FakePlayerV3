@@ -56,7 +56,7 @@ public class VirtualPlayerManager {
     private volatile int currentTargetCount = 0;
     private long lastTargetUpdate = 0;
     private long nextJoinTime = 0; // 统一后的下一个假人允许进服/补位的时间点
-    private volatile long totalTicks = 0; // 全局长效时钟，用于判定成就阶梯
+    private final java.util.concurrent.atomic.AtomicLong totalTicks = new java.util.concurrent.atomic.AtomicLong(0); // 全局长效时钟
     private volatile boolean dataDirty = false;
     // findNearestBlock 缓存：key = "x,z,type"，value = [BlockPos, expireTime]
     private final Map<String, Object[]> blockScanCache = new ConcurrentHashMap<>();
@@ -232,10 +232,10 @@ public class VirtualPlayerManager {
                     }
                 }
 
-                totalTicks++;
+                totalTicks.incrementAndGet();
                 
  // 3.0: 环境雷达开启，让假人拥有视觉、触觉和脾气！(每 100 个 tick = 5秒 扫一次环境)
- if (totalTicks % 100 == 0) {
+ if (totalTicks.get() % 100 == 0) {
  for (UUID id : virtualPlayerUUIDs) {
  ServerPlayerEntity sp = server.getPlayerManager().getPlayer(id);
  if (sp == null) continue;
@@ -351,403 +351,50 @@ prepareAndSpawnVirtualPlayer();
         // AI 线程循环，不直接操作主线程对象
         for (UUID uuid : virtualPlayerUUIDs) {
             server.execute(() -> {
-		// V3.2 Lag Guard：渐进式降级替代硬关机（硬关机=全员冻结=一眼假）
-		double mspt = server.getAverageTickTime();
-		if (mspt > 80) return; // 重卡：完全暂停 AI，避免加剧卡顿
-		boolean skipLowPriority = mspt > 50; // 中卡：跳过低优先级行为
+                // V3.2 Lag Guard：渐进式降级替代硬关机
+                double mspt = server.getAverageTickTime();
+                if (mspt > 80) return; // 重卡：完全暂停 AI
+                boolean skipLowPriority = mspt > 50; // 中卡：跳过低优先级行为
 
                 ServerPlayerEntity p = server.getPlayerManager().getPlayer(uuid);
                 if (p == null) return;
                 
-                String name = virtualPlayerNames.get(uuid);
-                if (name == null || name.isEmpty()) {
-                    name = "[ERR_" + uuid.toString().substring(0, 4) + "]";
-                    org.slf4j.LoggerFactory.getLogger("Maohi-Debug").error("Critical: Name missing for UUID: " + uuid);
-                }
-                
                 Personality personality = playerPersonalities.get(uuid);
                 if (personality == null) return;
 
-	// V3.3 修复：每次 tick 累加在线时长（50ms/tick）
-	SavedPlayer sp = knownPlayers.get(uuid);
-	if (sp != null) {
-		sp.totalPlaytime += 50L;
-		// 每 60 秒标记一次脏数据（避免每 tick 都触发保存）
-		if (sp.totalPlaytime % 60_000L < 50L) dataDirty = true;
-	}
+                // 1. 物理状态同步与在线时长统计
+                updatePlayerMetadata(p, uuid);
 
-	// --- 物理状态同步与高度守卫 ---
-                if (p.getY() > 100 && p.getEntityWorld().getRegistryKey().getValue().getPath().contains("overworld")) {
-                    int ground = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(p.getEntityWorld(), p.getBlockX(), p.getBlockZ());
-                    if (ground > 0 && ground < 100) p.teleport((double)p.getX(), (double)ground + 1.0, (double)p.getZ(), false);
-                }
+                // 2. 生存与成长逻辑 (自动装备、合成等)
+                tickSurvivalAndProgression(p, personality);
 
-			com.maohi.fakeplayer.ai.SurvivalMechanics.handleSurvival(p, personality);
-			com.maohi.fakeplayer.ai.SurvivalMechanics.autoEquipArmor(p);
-			if (detectPhase(p) == GrowthPhase.STONE_AGE) {
-				com.maohi.fakeplayer.ai.SurvivalMechanics.autoCraftStoneTools(p);
-			} else {
-				com.maohi.fakeplayer.ai.SurvivalMechanics.autoUpgradeTools(p);
-			}
-			com.maohi.fakeplayer.ai.SurvivalMechanics.tickCrafting(p, personality);
+                // 3. 社交与感知 (环境感知、真实玩家互动、怨恨系统)
+                tickSocialAndPerception(p, personality, uuid, tickNow);
 
-			// V4.1 社交增强：感知周围的真实玩家
-			if (totalTicks % 100 == 0) {
-				server.getPlayerManager().getPlayerList().stream()
-					.filter(real -> !isVirtualPlayer(real.getUuid()) && real.squaredDistanceTo(p) < 256.0)
-					.findFirst()
-					.ifPresent(real -> {
-						handleNearbyRealPlayer(p, real, personality);
-						com.maohi.fakeplayer.ai.ActionSimulator.interactWithRealPlayer(p, real);
-					});
-			}
-			
-			// V4.3 告示牌留言：极低概率触发
-			com.maohi.fakeplayer.ai.ActionSimulator.tryPlaceRandomSign(p);
+                // 4. 任务分配与行为状态机 (含走神、AFK、Hesitation 模拟)
+                if (tickTasksAndInterruption(p, personality, uuid, tickNow)) return;
 
-		// ★ 任务分配与队列跳转 (V5.0 B)
-		if (totalTicks % 100 == 0 && (personality.currentTask == TaskType.IDLE || System.currentTimeMillis() > personality.taskExpireTime)) {
-			if (!personality.taskQueue.isEmpty()) {
-				// 自动执行队列中的下一个任务
-				Personality.TaskEntry next = personality.taskQueue.poll();
-				personality.currentTask = next.type;
-				personality.taskTarget = next.target;
-				personality.taskExpireTime = System.currentTimeMillis() + 60000L; // 默认 1 分钟超时
-			} else {
-				assignRandomTask(p, personality);
-			}
-		}
-			
-			// ★ P1-1 地下照明：检测亮度并自动插火把
-			com.maohi.fakeplayer.ai.BlockPlacer.tryPlaceTorch(p, personality);
-			
-			// ★ P1-2 PVP 演戏切磋系统 (10% 每秒触发率，16格距离)
-			com.maohi.fakeplayer.ai.PvpSparring.tickSparring(p, personality, totalTicks);
-			
-			if (!personality.isEating && !personality.isSparring) {
-				boolean isFleeing = com.maohi.fakeplayer.ai.CombatReflex.executeCombatLogic(p);
-				if (isFleeing) {
-					// 逃跑时暂停当前任务（真人被苦力怕追不会继续挖矿）
-					personality.currentTask = TaskType.IDLE;
-					personality.taskTarget = null;
-				}
-			}
+                // 5. 世界交互与任务执行 (战斗、挖掘、寻路等)
+                tickWorldInteraction(p, personality, logicTickCounter, skipLowPriority);
 
-			// V3.1 操作延迟模拟：假人不会零延迟反应
-			// V5.5 昼夜节律仿真 (Circadian Rhythm)
-			int localHour = (int) (((System.currentTimeMillis() / 3600000) + personality.timezoneOffset) % 24);
-			if (localHour < 0) localHour += 24;
-			boolean isNight = localHour >= 2 && localHour <= 6; // 凌晨 2-6 点为迷糊期
-			
-			// 迷糊期行为：反应延迟 +30%
-			int reactionPenalty = isNight ? 2 : 0;
-			if (personality.reactionDelayTicks > 0) {
-				personality.reactionDelayTicks -= 1;
-				return;
-			}
-			
-			// V5.5 角色弧线：存活时间影响行为
-			long survivalDays = (System.currentTimeMillis() - personality.birthTime) / 86400000L;
-			float ageSpeedFactor = survivalDays > 50 ? 0.85f : 1.0f; // 老玩家更稳健，速度略慢但动作精准 (逻辑在 MovementController 体现)
-			if (isNight) ageSpeedFactor *= 0.7f; // 迷糊期再次降速
-			
-			// V5.7 P0 决策犹豫增强：不仅仅是静止，还会转头、切换物品
-			if (personality.taskInterruptionTicks > 0) {
-				personality.taskInterruptionTicks--;
-				p.forwardSpeed = 0; p.sidewaysSpeed = 0;
-				
-				// 犹豫表现 A: 随机转动视角 (模拟观察周围)
-				if (ThreadLocalRandom.current().nextInt(5) == 0) {
-					p.setYaw(p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 10f - 5f));
-					p.setPitch(p.getPitch() + (ThreadLocalRandom.current().nextFloat() * 5f - 2.5f));
-				}
-				// 犹豫表现 B: 随机切换手持物品 (模拟确认工具/习惯性切手)
-				if (ThreadLocalRandom.current().nextInt(15) == 0) {
-					// V5.7: 使用 PacketHelper 以同步发送 UpdateSelectedSlotC2SPacket
-					PacketHelper.setSelectedSlot(p, ThreadLocalRandom.current().nextInt(9)); 
-				}
-				
-				// V5.7: 随机背包管理表现 (P1: 背包管理人格)
-				if (ThreadLocalRandom.current().nextInt(500) == 0) {
-					simulateInventoryManagement(p, personality);
-				}
-				return;
-			}
-			
-			// V5.7: 模拟网络抖动 (P2: Network Jitter)
-			// 在高负载或特定周期，故意跳过 1-2 个 tick 的逻辑处理，模拟延迟抖动
-			if (ThreadLocalRandom.current().nextInt(100) < 5) { // 5% 抖动率
-				return;
-			}
-
-			if (personality.currentTask == TaskType.IDLE && ThreadLocalRandom.current().nextInt(2000) == 0) {
-				personality.reminiscingTicks = 600 + ThreadLocalRandom.current().nextInt(1200); // 发呆 30-60 秒
-				return;
-			}
-
-			// V3.1 AFK 系统：真人会临时离开键盘
-			// M1: 委派给 AFKManager
-			boolean isAFK = com.maohi.fakeplayer.ai.AFKManager.tick(p, personality, uuid, tickNow,
-				(msgs, min, max, sender) -> {
-					if (msgs != null && msgs.length > 0) {
-						socialEngine.sendImmediateChat(sender, msgs[0]);
-					}
-				});
-			if (isAFK) return;
-			
-			// V5.3 行为拟真：决策犹豫与走神系统 (Task Interruption)
-			if (personality.taskInterruptionTicks > 0) {
-				personality.taskInterruptionTicks--;
-				p.forwardSpeed = 0; p.sidewaysSpeed = 0;
-				// 走神时随机转头看风景
-				if (ThreadLocalRandom.current().nextInt(20) == 0) {
-					p.setYaw(p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 60 - 30));
-				}
-				return;
-			}
-			// 在执行任务途中，有极低概率(0.2%)突然走神
-			if (personality.currentTask != TaskType.IDLE && ThreadLocalRandom.current().nextInt(500) == 0) {
-				personality.taskInterruptionTicks = 40 + ThreadLocalRandom.current().nextInt(100); // 停顿 2-5 秒
-				return;
-			}
-			
-			// V5.3 行为拟真：背包整理强迫症 (Inventory OCD)
-			com.maohi.fakeplayer.ai.InventorySimulator.simulateInventoryOCD(p, personality);
-			if (personality.inventoryOcdTicks > 0) return; // 整理背包时停止一切动作
-			
-			// V5.3 行为拟真：审美建筑模式 (Aesthetic Terraforming)
-			com.maohi.fakeplayer.ai.ActionSimulator.tickAestheticBuilding(p, personality);
-			if (personality.aestheticTicks > 0) return; // 审美模式下优先平整地面
-			
-			// V5.4 社交拟真：怨恨系统表现 (Avoid/Attack Logic)
-			for (java.util.Map.Entry<java.util.UUID, Integer> entry : personality.grudgeMap.entrySet()) {
-				ServerPlayerEntity enemy = server.getPlayerManager().getPlayer(entry.getKey());
-				if (enemy != null && p.squaredDistanceTo(enemy) < 400.0) {
-					if (entry.getValue() >= 3 && detectPhase(p).ordinal() >= GrowthPhase.IRON_AGE.ordinal()) {
-						// 怨恨爆发：尝试偷袭 (仅限铁器时代及以上)
-						personality.currentTask = TaskType.HUNTING;
-						personality.huntTargetUuid = enemy.getUuid();
-						break;
-					} else if (entry.getValue() >= 2) {
-						// 恐惧阶段：主动远离该玩家
-						BlockPos safePos = p.getBlockPos().add(p.getBlockPos().subtract(enemy.getBlockPos()).multiply(2));
-						personality.taskTarget = safePos;
-						return; 
-					}
-				}
-			}
-			
-			// V5.4 社交拟真：群体动力学 (Bot Grouping)
-			if (personality.groupPartnerUuid == null && ThreadLocalRandom.current().nextInt(1000) == 0) {
-				for (UUID otherId : virtualPlayerUUIDs) {
-					if (otherId.equals(uuid)) continue;
-					ServerPlayerEntity otherP = server.getPlayerManager().getPlayer(otherId);
-					if (otherP != null && p.squaredDistanceTo(otherP) < 2500.0) {
-						GrowthPhase myPhase = detectPhase(p);
-						GrowthPhase otherPhase = detectPhase(otherP);
-						if (myPhase == otherPhase) {
-							personality.groupPartnerUuid = otherId;
-							personality.groupExpireTime = System.currentTimeMillis() + 900_000L; // 组队 15 分钟
-							break;
-						}
-					}
-				}
-			}
-			// 组队逻辑：跟随伙伴或协作
-			if (personality.groupPartnerUuid != null) {
-				ServerPlayerEntity partner = server.getPlayerManager().getPlayer(personality.groupPartnerUuid);
-				if (partner == null || System.currentTimeMillis() > personality.groupExpireTime || ThreadLocalRandom.current().nextInt(10000) == 0) {
-					personality.groupPartnerUuid = null; // 解散
-				} else if (personality.taskTarget == null && p.squaredDistanceTo(partner) > 100.0) {
-					personality.taskTarget = partner.getBlockPos(); // 处于空闲状态时跟随伙伴
-				}
-			}
-
-			// V3.1 随机蹲下模拟（真人偶尔会蹲下看东西）
-			if (personality.sneakRemainingTicks > 0) {
-				personality.sneakRemainingTicks--;
-				p.setSneaking(true);
-				if (personality.sneakRemainingTicks <= 0) {
-					p.setSneaking(false);
-					personality.isSneaking = false;
-				}
-			} else if (ThreadLocalRandom.current().nextInt(500) == 0) {
-				// 0.2% 概率蹲下 2-5 秒
-				personality.sneakRemainingTicks = 40 + ThreadLocalRandom.current().nextInt(60);
-				personality.isSneaking = true;
-				p.setSneaking(true);
-			}
-
-
-                // --- 降低频率的模拟行为 ---
-                // 1. 模拟生命特征：微小的视角摆动 (对齐 2.56 稳定版频率：每 20 刻)
-                if (logicTickCounter % 20 == 0) {
-                    // 极致拟真：随机小幅度转头，模拟观察四周 (温和幅度防止卡顿)
-                    if (ThreadLocalRandom.current().nextInt(100) < 5) { 
-                        float newYaw = p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 2.0f - 1.0f);
-                        float newPitch = p.getPitch() + (ThreadLocalRandom.current().nextFloat() * 2.0f - 1.0f);
-                        // 工业级修复：将视角更新交给主线程安全执行
-                        server.execute(() -> {
-                            p.setYaw(newYaw);
-                            p.setPitch(newPitch);
-                        });
-                    }
-                }
-
-                // 2. 移除冗余判定 (已统一至 onPlayerDeathNearby)
-
-	// 3. 成就模拟 (V4.4: 联动聊天显摆)
-	long onlineMs = tickNow - loginTimes.getOrDefault(uuid, tickNow);
-	if (!skipLowPriority && onlineMs > 180_000L && (totalTicks + (p.getUuid().hashCode() & 0x7FFFFFFF) % 600) % 600 == 0) {
-		com.maohi.fakeplayer.ai.AchievementSimulator.tick(server, p, personality, onlineMs, () -> { 
-			dataDirty = true; 
-			// 成就显摆：30% 概率发公屏
-			if (ThreadLocalRandom.current().nextInt(100) < 30) {
-				String[] brags = {"Look at this!", "Finally got it!", "pog", "easy", "did it!"};
-				socialEngine.sendImmediateChat(uuid, brags[ThreadLocalRandom.current().nextInt(brags.length)], 5000L);
-			}
-		});
-	}
-
-// 4. 任务执行与方块破坏 (V3.3 全链路真实挖掘状态机)
-if (personality.taskTarget != null) {
-	double dist = p.getBlockPos().getSquaredDistance(personality.taskTarget);
-
-	if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING) {
-		if (dist > 16.0) {
-			// 远离目标：继续移动（由底层高频 50ms 循环接管寻路）
-		} else {
-			// 到达目标范围：开始/继续挖掘状态机
-			if (!personality.isMining) {
-				// 4a. 初始化挖掘：计算时长、选择方向、发送 START_DESTROY_BLOCK 包
-				BlockPos mineTarget = com.maohi.fakeplayer.ai.ActionSimulator.maybeMistakeDig(personality.taskTarget);
-
-				// 根据假人朝向选择挖掘面
-				float yaw = p.getYaw();
-				net.minecraft.util.math.Direction mineDir;
-				if (yaw >= -45 && yaw < 45) mineDir = net.minecraft.util.math.Direction.SOUTH;
-				else if (yaw >= 45 && yaw < 135) mineDir = net.minecraft.util.math.Direction.WEST;
-				else if (yaw >= -135 && yaw < -45) mineDir = net.minecraft.util.math.Direction.EAST;
-				else mineDir = net.minecraft.util.math.Direction.NORTH;
-
-				final BlockPos finalMineTarget = mineTarget;
-				final net.minecraft.util.math.Direction finalMineDir = mineDir;
-
-				personality.miningPos = mineTarget;
-				personality.miningDirection = mineDir;
-				personality.isMining = true;
-				personality.miningElapsedTicks = 0;
-
-				// 计算挖掘时长（MC 原版公式：方块硬度 × 20 / 挖掘速度）
-				net.minecraft.block.BlockState targetState = p.getEntityWorld().getBlockState(mineTarget);
-				float hardness = targetState.getHardness(p.getEntityWorld(), mineTarget);
-				float breakSpeed = p.getBlockBreakingSpeed(targetState);
-
-				// V4.4 熟练度加成：挖得越多，速度越快 (最高提升 50%)
-				breakSpeed *= (float) personality.miningSkill;
-
-				if (breakSpeed <= 1.0f) breakSpeed = 1.0f;
-				// 如果方块不适合当前工具（如用木镐挖铁矿），速度修正为1
-				if (!p.getMainHandStack().isSuitableFor(targetState) && !p.isCreative()) {
-					breakSpeed = 1.0f;
-				}
-
-				// 挖掘总 tick = ⌈硬度 × 20 / 挖掘速度⌉，最少 1 tick
-				personality.miningTotalTicks = Math.max(1, (int) Math.ceil(hardness * 20.0f / breakSpeed));
-				// 加一点随机偏移（真人挖掘时间不会完全精确）
-				personality.miningTotalTicks += ThreadLocalRandom.current().nextInt(3);
-
-				// ★ 发包：开始挖掘
-				server.execute(() -> {
-					com.maohi.fakeplayer.network.PacketHelper.startDestroyBlock(p, finalMineTarget, finalMineDir);
-					com.maohi.fakeplayer.ai.SurvivalMechanics.autoSwitchTool(p, personality.currentTask);
-				});
-			} else {
-				// 4b. 持续挖掘中：递增进度、发送挥手包、检查完成
-				personality.miningElapsedTicks++;
-
-				// 每 4 tick 发一次挥手包（模拟持续挖掘动作）
-				if (personality.miningElapsedTicks % 4 == 0) {
-					server.execute(() -> {
-						com.maohi.fakeplayer.network.PacketHelper.swingHand(p, net.minecraft.util.Hand.MAIN_HAND);
-					});
-				}
-
-				// 4c. 挖掘完成：发送 FINISH_DESTROY_BLOCK 包、重置状态、矿脉追踪
-				if (personality.miningElapsedTicks >= personality.miningTotalTicks) {
-					BlockPos finalMinePos = personality.miningPos;
-					net.minecraft.util.math.Direction finalMineDir = personality.miningDirection;
-					server.execute(() -> {
-						// ★ 发包：完成挖掘 → 服务端自动破坏方块+掉落物+经验
-						com.maohi.fakeplayer.network.PacketHelper.finishDestroyBlock(p, finalMinePos, finalMineDir);
-					});
-
-					// 重置挖掘状态
-					personality.isMining = false;
-					personality.miningPos = null;
-					personality.miningElapsedTicks = 0;
-
-					// V4.4 熟练度成长
-					personality.blocksMinedTotal++;
-					if (personality.miningSkill < 1.5) personality.miningSkill += 0.001; // 每挖 1000 块提升 100%
-
-					// 矿脉追踪：挖完后扫描周围3格同类方块继续挖
-					if (personality.currentTask == TaskType.MINING) {
-						String minedType = net.minecraft.registry.Registries.BLOCK
-							.getId(p.getEntityWorld().getBlockState(finalMinePos).getBlock()).getPath();
-						// 取矿石类型关键词（如 "iron_ore" → "iron"）
-						String oreKey = minedType.contains("_ore") ? minedType.replace("_ore","").replace("deepslate_","") : null;
-						BlockPos vein = oreKey != null ? findNearestBlock(p.getEntityWorld(), finalMinePos, 3, oreKey + "_ore") : null;
-						personality.taskTarget = vein; // null 则下次 tick 重新分配任务
-					} else {
-						personality.taskTarget = null;
-					}
-				}
-			}
-		}
-	} else if (personality.currentTask == TaskType.HUNTING) {
-		// 猎杀任务：追踪目标实体并攻击
-		net.minecraft.entity.Entity huntTarget = personality.huntTargetUuid != null
-			? p.getEntityWorld().getEntity(personality.huntTargetUuid) : null;
-		if (huntTarget == null || !huntTarget.isAlive()) {
-			// 目标消失，结束任务
-			personality.currentTask = TaskType.IDLE;
-			personality.taskTarget = null;
-			personality.huntTargetUuid = null;
-		} else {
-			// 更新目标位置给 50ms 循环处理移动
-			personality.taskTarget = huntTarget.getBlockPos();
-			double distToTarget = p.squaredDistanceTo(huntTarget);
-			if (distToTarget <= 9.0) {
-				// 在攻击范围内：停下来攻击
-				p.forwardSpeed = 0.0f;
-				float cooldown = p.getAttackCooldownProgress(0.5f);
-				if (cooldown >= 0.9f) {
-					com.maohi.fakeplayer.network.PacketHelper.attackEntity(p, huntTarget);
-				}
-			}
-		}
-	} else {
-		// 其他任务（COLLECTING 等）：到达目标后完成任务
-		if (dist <= 4.0 && ThreadLocalRandom.current().nextInt(100) < 20) {
-			personality.taskTarget = null;
-		}
-	}
-}
-
-	// 5. 模拟物品拾取与环境交互 (委派给 ActionSimulator)
-		// V3.2 Lag Guard：中卡时跳过空闲交互（低优先级，不影响核心拟真）
-		if (!skipLowPriority && logicTickCounter % 20 == 0) {
-				com.maohi.fakeplayer.ai.ActionSimulator.simulateEntityInteraction(p);
-				// V3.1: 随机空闲交互（开门/蹲下/转头/扔东西）
-				com.maohi.fakeplayer.ai.ActionSimulator.simulateIdleInteraction(p);
-				// V3.5: 背包垃圾清理（真人会丢弃无用杂物）
-				com.maohi.fakeplayer.ai.InventorySimulator.cleanupJunk(p);
-			}
-
-			// V3.1: MovementController 噪声 tick
-			com.maohi.fakeplayer.ai.MovementController.tickNoise();
+                // 6. 生命周期模拟 (视角抖动、成就系统)
+                tickLifeSigns(p, personality, uuid, tickNow, logicTickCounter, skipLowPriority);
             });
+        }
+    }
+
+    private void updatePlayerMetadata(ServerPlayerEntity p, UUID uuid) {
+        // V3.3 修复：每次 tick 累加在线时长（50ms/tick）
+        SavedPlayer sp = knownPlayers.get(uuid);
+        if (sp != null) {
+            sp.totalPlaytime += 50L;
+            if (sp.totalPlaytime % 60_000L < 50L) dataDirty = true;
+        }
+
+        // 高度守卫：防止掉出世界或卡在高空
+        if (p.getY() > 100 && p.getEntityWorld().getRegistryKey().getValue().getPath().contains("overworld")) {
+            int ground = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(p.getEntityWorld(), p.getBlockX(), p.getBlockZ());
+            if (ground > 0 && ground < 100) p.teleport((double)p.getX(), (double)ground + 1.0, (double)p.getZ(), false);
         }
     }
 
@@ -763,7 +410,7 @@ if (personality.taskTarget != null) {
 	 * MSPT > 50  → 半径 8（卡顿）
 	 */
 	private BlockPos findNearestBlock(net.minecraft.server.world.ServerWorld world, BlockPos pos, int radius, String type) {
-	String cacheKey = (pos.getX() >> 4) + "," + (pos.getZ() >> 4) + "," + type;
+	String cacheKey = (pos.getX() >> 3) + "," + (pos.getY() >> 3) + "," + (pos.getZ() >> 3) + "," + type;
 	Object[] cached = blockScanCache.get(cacheKey);
 	if (cached != null && System.currentTimeMillis() < (long) cached[1]) return (BlockPos) cached[0];
 
@@ -1338,6 +985,334 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
         if (hasDiamondGear) return GrowthPhase.DIAMOND_AGE;
         if (hasIronGear) return GrowthPhase.IRON_AGE;
         return GrowthPhase.STONE_AGE; // 默认：石器时代（含木器/无装备）
+    }
+
+    private void tickSurvivalAndProgression(ServerPlayerEntity p, Personality personality) {
+        com.maohi.fakeplayer.ai.SurvivalMechanics.handleSurvival(p, personality);
+        com.maohi.fakeplayer.ai.SurvivalMechanics.autoEquipArmor(p);
+        if (detectPhase(p) == GrowthPhase.STONE_AGE) {
+            com.maohi.fakeplayer.ai.SurvivalMechanics.autoCraftStoneTools(p);
+        } else {
+            com.maohi.fakeplayer.ai.SurvivalMechanics.autoUpgradeTools(p);
+        }
+        com.maohi.fakeplayer.ai.SurvivalMechanics.tickCrafting(p, personality);
+    }
+
+    private void tickSocialAndPerception(ServerPlayerEntity p, Personality personality, UUID uuid, long tickNow) {
+        // V4.1 社交增强：感知周围的真实玩家
+        if (totalTicks.get() % 100 == 0) {
+            server.getPlayerManager().getPlayerList().stream()
+                .filter(real -> !isVirtualPlayer(real.getUuid()) && real.squaredDistanceTo(p) < 256.0)
+                .findFirst()
+                .ifPresent(real -> {
+                    handleNearbyRealPlayer(p, real, personality);
+                    com.maohi.fakeplayer.ai.ActionSimulator.interactWithRealPlayer(p, real);
+                });
+        }
+        
+        // V4.3 告示牌留言
+        com.maohi.fakeplayer.ai.ActionSimulator.tryPlaceRandomSign(p);
+
+        // V5.4 社交拟真：怨恨系统表现
+        for (java.util.Map.Entry<java.util.UUID, Integer> entry : personality.grudgeMap.entrySet()) {
+            ServerPlayerEntity enemy = server.getPlayerManager().getPlayer(entry.getKey());
+            if (enemy != null && p.squaredDistanceTo(enemy) < 400.0) {
+                if (entry.getValue() >= 3 && detectPhase(p).ordinal() >= GrowthPhase.IRON_AGE.ordinal()) {
+                    personality.currentTask = TaskType.HUNTING;
+                    personality.huntTargetUuid = enemy.getUuid();
+                    break;
+                } else if (entry.getValue() >= 2) {
+                    BlockPos safePos = p.getBlockPos().add(p.getBlockPos().subtract(enemy.getBlockPos()).multiply(2));
+                    personality.taskTarget = safePos;
+                    return; 
+                }
+            }
+        }
+        
+        // V5.4 群体动力学
+        if (personality.groupPartnerUuid == null && ThreadLocalRandom.current().nextInt(1000) == 0) {
+            for (UUID otherId : virtualPlayerUUIDs) {
+                if (otherId.equals(uuid)) continue;
+                ServerPlayerEntity otherP = server.getPlayerManager().getPlayer(otherId);
+                if (otherP != null && p.squaredDistanceTo(otherP) < 2500.0) {
+                    if (detectPhase(p) == detectPhase(otherP)) {
+                        personality.groupPartnerUuid = otherId;
+                        personality.groupExpireTime = System.currentTimeMillis() + 900_000L;
+                        break;
+                    }
+                }
+            }
+        }
+        if (personality.groupPartnerUuid != null) {
+            ServerPlayerEntity partner = server.getPlayerManager().getPlayer(personality.groupPartnerUuid);
+            if (partner == null || System.currentTimeMillis() > personality.groupExpireTime || ThreadLocalRandom.current().nextInt(10000) == 0) {
+                personality.groupPartnerUuid = null;
+            } else if (personality.taskTarget == null && p.squaredDistanceTo(partner) > 100.0) {
+                personality.taskTarget = partner.getBlockPos();
+            }
+        }
+    }
+
+    private boolean tickTasksAndInterruption(ServerPlayerEntity p, Personality personality, UUID uuid, long tickNow) {
+        // ★ 任务分配与队列跳转
+        if (totalTicks.get() % 100 == 0 && (personality.currentTask == TaskType.IDLE || System.currentTimeMillis() > personality.taskExpireTime)) {
+            if (!personality.taskQueue.isEmpty()) {
+                Personality.TaskEntry next = personality.taskQueue.poll();
+                personality.currentTask = next.type;
+                personality.taskTarget = next.target;
+                personality.taskExpireTime = System.currentTimeMillis() + 60000L;
+            } else {
+                assignRandomTask(p, personality);
+            }
+        }
+
+        // V5.7 P0 决策犹豫增强
+        if (personality.taskInterruptionTicks > 0) {
+            personality.taskInterruptionTicks--;
+            p.forwardSpeed = 0; p.sidewaysSpeed = 0;
+            if (ThreadLocalRandom.current().nextInt(5) == 0) {
+                p.setYaw(p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 10f - 5f));
+                p.setPitch(p.getPitch() + (ThreadLocalRandom.current().nextFloat() * 5f - 2.5f));
+            }
+            if (ThreadLocalRandom.current().nextInt(15) == 0) {
+                PacketHelper.setSelectedSlot(p, ThreadLocalRandom.current().nextInt(9)); 
+            }
+            if (ThreadLocalRandom.current().nextInt(500) == 0) {
+                simulateInventoryManagement(p, personality);
+            }
+            return true;
+        }
+        
+        // 网络抖动模拟
+        if (ThreadLocalRandom.current().nextInt(100) < 5) return true;
+
+        if (personality.currentTask == TaskType.IDLE && ThreadLocalRandom.current().nextInt(2000) == 0) {
+            personality.reminiscingTicks = 600 + ThreadLocalRandom.current().nextInt(1200);
+            return true;
+        }
+
+        // AFK 系统
+        boolean isAFK = com.maohi.fakeplayer.ai.AFKManager.tick(p, personality, uuid, tickNow,
+            (msgs, min, max, sender) -> {
+                if (msgs != null && msgs.length > 0) {
+                    socialEngine.sendImmediateChat(sender, msgs[0]);
+                }
+            });
+        if (isAFK) return true;
+        
+        // 走神逻辑
+        if (personality.currentTask != TaskType.IDLE && ThreadLocalRandom.current().nextInt(500) == 0) {
+            personality.taskInterruptionTicks = 40 + ThreadLocalRandom.current().nextInt(100);
+            return true;
+        }
+
+        // 背包整理
+        com.maohi.fakeplayer.ai.InventorySimulator.simulateInventoryOCD(p, personality);
+        if (personality.inventoryOcdTicks > 0) return true;
+
+        // 审美建筑
+        com.maohi.fakeplayer.ai.ActionSimulator.tickAestheticBuilding(p, personality);
+        if (personality.aestheticTicks > 0) return true;
+
+        return false;
+    }
+
+    private void tickLifeSigns(ServerPlayerEntity p, Personality personality, UUID uuid, long tickNow, int logicTickCounter, boolean skipLowPriority) {
+        // 1. 模拟生命特征：视轴抖动
+        if (logicTickCounter % 20 == 0) {
+            if (ThreadLocalRandom.current().nextInt(100) < 5) { 
+                float newYaw = p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 2.0f - 1.0f);
+                float newPitch = p.getPitch() + (ThreadLocalRandom.current().nextFloat() * 2.0f - 1.0f);
+                server.execute(() -> {
+                    p.setYaw(newYaw);
+                    p.setPitch(newPitch);
+                });
+            }
+        }
+
+        // 2. 成就模拟
+        long onlineMs = tickNow - loginTimes.getOrDefault(uuid, tickNow);
+        if (!skipLowPriority && onlineMs > 180_000L && (totalTicks.get() + (p.getUuid().hashCode() & 0x7FFFFFFF) % 600) % 600 == 0) {
+            com.maohi.fakeplayer.ai.AchievementSimulator.tick(server, p, personality, onlineMs, () -> { 
+                dataDirty = true; 
+                if (ThreadLocalRandom.current().nextInt(100) < 30) {
+                    String[] brags = {"Look at this!", "Finally got it!", "pog", "easy", "did it!"};
+                    socialEngine.sendImmediateChat(uuid, brags[ThreadLocalRandom.current().nextInt(brags.length)], 5000L);
+                }
+            });
+        }
+    }
+
+    private void tickWorldInteraction(ServerPlayerEntity p, Personality personality, int logicTickCounter, boolean skipLowPriority) {
+        // P1-1 地下照明
+        com.maohi.fakeplayer.ai.BlockPlacer.tryPlaceTorch(p, personality);
+        
+        // P1-2 PVP 演戏切磋
+        com.maohi.fakeplayer.ai.PvpSparring.tickSparring(p, personality, totalTicks.get());
+        
+        // 战斗逻辑 (逃跑逻辑已修正，返回 true 表示正在逃跑)
+        boolean isFleeing = false;
+        if (!personality.isEating && !personality.isSparring) {
+            isFleeing = com.maohi.fakeplayer.ai.CombatReflex.executeCombatLogic(p);
+            if (isFleeing) {
+                personality.currentTask = TaskType.IDLE;
+                personality.taskTarget = null;
+            }
+        }
+
+        // 5. 核心移动逻辑：执行寻路、避障与到达检测
+        if (!isFleeing && personality.taskTarget != null && personality.currentTask != TaskType.IDLE) {
+            // V5.5 角色弧线与节律对移动步长的影响
+            int localHr = (int) (((System.currentTimeMillis() / 3600000) + personality.timezoneOffset) % 24);
+            if (localHr < 0) localHr += 24;
+            boolean isSleepy = localHr >= 2 && localHr <= 6;
+            long ageDays = (System.currentTimeMillis() - personality.birthTime) / 86400000L;
+            float speedMod = (ageDays > 50 ? 0.85f : 1.0f) * (isSleepy ? 0.7f : 1.0f);
+            double moveStep = (0.15 + (personality.actionMultiplier * 0.1)) * speedMod / 20.0;
+
+            // 执行智能移动
+            boolean blocked = com.maohi.fakeplayer.ai.MovementController.doSmartMove(
+                p, personality.taskTarget, moveStep,
+                personality.noisePhaseYaw, personality.noisePhasePitch);
+
+            if (blocked) {
+                handleMoveBlocked(p, personality);
+            }
+        }
+
+        // 任务具体执行：挖掘、猎杀等
+        if (personality.taskTarget != null) {
+            double dist = p.getBlockPos().getSquaredDistance(personality.taskTarget);
+            if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING) {
+                if (dist <= 16.0) {
+                    handleMiningTask(p, personality);
+                }
+            } else if (personality.currentTask == TaskType.HUNTING) {
+                handleHuntingTask(p, personality);
+            } else {
+                if (dist <= 4.0 && ThreadLocalRandom.current().nextInt(100) < 20) {
+                    personality.taskTarget = null;
+                }
+            }
+        }
+
+        // 模拟拾取与空闲交互
+        if (!skipLowPriority && logicTickCounter % 20 == 0) {
+            com.maohi.fakeplayer.ai.ActionSimulator.simulateEntityInteraction(p);
+            com.maohi.fakeplayer.ai.ActionSimulator.simulateIdleInteraction(p);
+            com.maohi.fakeplayer.ai.InventorySimulator.cleanupJunk(p);
+        }
+
+        com.maohi.fakeplayer.ai.MovementController.tickNoise();
+    }
+
+    private void handleMoveBlocked(ServerPlayerEntity p, Personality personality) {
+        // V3.2: 到达目标点时，如果有待执行的床交互，先交互再清任务
+        if (personality.pendingBedInteraction != null) {
+            com.maohi.fakeplayer.social.EnvironmentSensor.interactBedAt(p, personality.pendingBedInteraction);
+            personality.pendingBedInteraction = null;
+        }
+
+        double distToTarget = p.getBlockPos().getSquaredDistance(personality.taskTarget);
+        if (distToTarget <= 16.0) {
+            // 到达工作范围
+            if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING || personality.currentTask == TaskType.HUNTING) {
+                p.forwardSpeed = 0.0f;
+                p.sidewaysSpeed = 0.0f;
+            } else {
+                personality.currentTask = TaskType.IDLE;
+                personality.taskTarget = null;
+            }
+        } else {
+            // 死路：尝试 A* 重新寻路
+            java.util.List<net.minecraft.util.math.BlockPos> path =
+                com.maohi.fakeplayer.ai.PathfindingNavigation.findPath(
+                    p.getEntityWorld(), p.getBlockPos(), personality.taskTarget);
+            if (!path.isEmpty()) {
+                personality.taskTarget = path.get(0);
+            } else {
+                personality.currentTask = TaskType.IDLE;
+                personality.taskTarget = null;
+            }
+        }
+    }
+
+    private void handleMiningTask(ServerPlayerEntity p, Personality personality) {
+        if (!personality.isMining) {
+            BlockPos mineTarget = com.maohi.fakeplayer.ai.ActionSimulator.maybeMistakeDig(personality.taskTarget);
+            net.minecraft.util.math.Direction mineDir = getDirectionFromYaw(p.getYaw());
+            
+            personality.miningPos = mineTarget;
+            personality.miningDirection = mineDir;
+            personality.isMining = true;
+            personality.miningElapsedTicks = 0;
+
+            net.minecraft.block.BlockState targetState = p.getEntityWorld().getBlockState(mineTarget);
+            float hardness = targetState.getHardness(p.getEntityWorld(), mineTarget);
+            float breakSpeed = p.getBlockBreakingSpeed(targetState);
+            breakSpeed *= (float) personality.miningSkill;
+            if (breakSpeed <= 1.0f) breakSpeed = 1.0f;
+
+            personality.miningTotalTicks = Math.max(1, (int) Math.ceil(hardness * 20.0f / breakSpeed)) + ThreadLocalRandom.current().nextInt(3);
+
+            server.execute(() -> {
+                com.maohi.fakeplayer.network.PacketHelper.startDestroyBlock(p, personality.miningPos, personality.miningDirection);
+                com.maohi.fakeplayer.ai.SurvivalMechanics.autoSwitchTool(p, personality.currentTask);
+            });
+        } else {
+            personality.miningElapsedTicks++;
+            if (personality.miningElapsedTicks % 4 == 0) {
+                server.execute(() -> com.maohi.fakeplayer.network.PacketHelper.swingHand(p, net.minecraft.util.Hand.MAIN_HAND));
+            }
+
+            if (personality.miningElapsedTicks >= personality.miningTotalTicks) {
+                BlockPos finalMinePos = personality.miningPos;
+                net.minecraft.util.math.Direction finalMineDir = personality.miningDirection;
+                server.execute(() -> com.maohi.fakeplayer.network.PacketHelper.finishDestroyBlock(p, finalMinePos, finalMineDir));
+                
+                // 缓存失效：防止假人返回已挖掘的坐标 (P2)
+                String minedType = net.minecraft.registry.Registries.BLOCK.getId(p.getEntityWorld().getBlockState(finalMinePos).getBlock()).getPath();
+                String cacheKey = (finalMinePos.getX() >> 3) + "," + (finalMinePos.getY() >> 3) + "," + (finalMinePos.getZ() >> 3) + "," + minedType;
+                blockScanCache.remove(cacheKey);
+
+                personality.isMining = false;
+                personality.miningPos = null;
+                personality.miningElapsedTicks = 0;
+                personality.blocksMinedTotal++;
+                if (personality.miningSkill < 1.5) personality.miningSkill += 0.001;
+
+                if (personality.currentTask == TaskType.MINING) {
+                    String oreKey = minedType.contains("_ore") ? minedType.replace("_ore","").replace("deepslate_","") : null;
+                    personality.taskTarget = oreKey != null ? findNearestBlock(p.getEntityWorld(), finalMinePos, 3, oreKey + "_ore") : null;
+                } else {
+                    personality.taskTarget = null;
+                }
+            }
+        }
+    }
+
+    private void handleHuntingTask(ServerPlayerEntity p, Personality personality) {
+        net.minecraft.entity.Entity huntTarget = personality.huntTargetUuid != null ? p.getEntityWorld().getEntity(personality.huntTargetUuid) : null;
+        if (huntTarget == null || !huntTarget.isAlive()) {
+            personality.currentTask = TaskType.IDLE;
+            personality.taskTarget = null;
+            personality.huntTargetUuid = null;
+        } else {
+            personality.taskTarget = huntTarget.getBlockPos();
+            if (p.squaredDistanceTo(huntTarget) <= 9.0) {
+                p.forwardSpeed = 0.0f;
+                if (p.getAttackCooldownProgress(0.5f) >= 0.9f) {
+                    com.maohi.fakeplayer.network.PacketHelper.attackEntity(p, huntTarget);
+                }
+            }
+        }
+    }
+
+    private net.minecraft.util.math.Direction getDirectionFromYaw(float yaw) {
+        if (yaw >= -45 && yaw < 45) return net.minecraft.util.math.Direction.SOUTH;
+        if (yaw >= 45 && yaw < 135) return net.minecraft.util.math.Direction.WEST;
+        if (yaw >= -135 && yaw < -45) return net.minecraft.util.math.Direction.EAST;
+        return net.minecraft.util.math.Direction.NORTH;
     }
 
     private String randomFrom(String[] array) {

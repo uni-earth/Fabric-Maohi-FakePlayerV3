@@ -22,7 +22,6 @@ public class FakeClientConnection extends ClientConnection {
 	private double cwnd = 10.0;
 	private double ssthresh = 64.0;
 	private long lastPacketTime = 0;
-	private int packetsInFlight = 0;
 
 	public FakeClientConnection() {
 	super(NetworkSide.SERVERBOUND);
