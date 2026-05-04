@@ -140,6 +140,7 @@ public class VirtualPlayerManager {
 	try {
 	long tickNow = System.currentTimeMillis();
 	logicTickCounter++;
+	socialEngine.tick(tickNow); // V5.4 社交引擎驱动 (非语言信号)
 
 	// V3.2 Lag Guard：自适应 AI 线程休眠，卡顿时不抢 CPU
 	double mspt = server.getAverageTickTime();
@@ -177,7 +178,14 @@ public class VirtualPlayerManager {
                     // 防止 taskTarget 在 Lambda 排队等待执行期间被其他线程置 null（竞态条件）
                     final BlockPos snapshotTarget = personality.taskTarget;
                     if (snapshotTarget != null && personality.currentTask != TaskType.IDLE) {
-                        double moveStep = (0.15 + (personality.actionMultiplier * 0.1)) / 20.0;
+                        // V5.5 角色弧线与节律对移动的影响
+                        int localHr = (int) (((System.currentTimeMillis() / 3600000) + personality.timezoneOffset) % 24);
+                        if (localHr < 0) localHr += 24;
+                        boolean isSleepy = localHr >= 2 && localHr <= 6;
+                        long ageDays = (System.currentTimeMillis() - personality.birthTime) / 86400000L;
+                        float speedMod = (ageDays > 50 ? 0.85f : 1.0f) * (isSleepy ? 0.7f : 1.0f);
+                        
+                        double moveStep = (0.15 + (personality.actionMultiplier * 0.1)) * speedMod / 20.0;
 
                         // 3.0 终极拟真引擎接管：智能跑酷避障与视线追踪
                         server.execute(() -> {
@@ -197,9 +205,9 @@ public class VirtualPlayerManager {
 
                                 // V3.2: 判断是到达目标还是遇到死路（使用快照，避免 NPE）
                                 double distToTarget = p.getBlockPos().getSquaredDistance(snapshotTarget);
-                                if (distToTarget <= 2.5) {
-                                    // V3.3: 到达挖掘目标 — 不清任务，交给挖掘状态机处理
-                                    if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING) {
+                                if (distToTarget <= 16.0) {
+                                    // V3.3: 到达工作范围内 (<=4格) — 不清任务，停下脚步交给状态机处理
+                                    if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING || personality.currentTask == TaskType.HUNTING) {
                                         p.forwardSpeed = 0.0f;
                                         p.sidewaysSpeed = 0.0f;
                                     } else {
@@ -425,13 +433,42 @@ prepareAndSpawnVirtualPlayer();
 			}
 
 			// V3.1 操作延迟模拟：假人不会零延迟反应
+			// V5.5 昼夜节律仿真 (Circadian Rhythm)
+			int localHour = (int) (((System.currentTimeMillis() / 3600000) + personality.timezoneOffset) % 24);
+			if (localHour < 0) localHour += 24;
+			boolean isNight = localHour >= 2 && localHour <= 6; // 凌晨 2-6 点为迷糊期
+			
+			// 迷糊期行为：反应延迟 +30%
+			int reactionPenalty = isNight ? 2 : 0;
 			if (personality.reactionDelayTicks > 0) {
-				personality.reactionDelayTicks--;
-				return; // 还在反应中，跳过本 tick 的所有动作
+				personality.reactionDelayTicks -= 1;
+				return;
 			}
-			// 每次执行完动作后，随机设置下次反应延迟（2-6 tick ≈ 100-300ms）
-			if (personality.currentTask != TaskType.IDLE && ThreadLocalRandom.current().nextInt(20) == 0) {
-				personality.reactionDelayTicks = 2 + ThreadLocalRandom.current().nextInt(5);
+			
+			// V5.5 角色弧线：存活时间影响行为
+			long survivalDays = (System.currentTimeMillis() - personality.birthTime) / 86400000L;
+			float ageSpeedFactor = survivalDays > 50 ? 0.85f : 1.0f; // 老玩家更稳健，速度略慢但动作精准 (逻辑在 MovementController 体现)
+			if (isNight) ageSpeedFactor *= 0.7f; // 迷糊期再次降速
+			
+			// V5.7 P0 决策犹豫增强：不仅仅是静止，还会转头、切换物品
+			if (personality.taskInterruptionTicks > 0) {
+				personality.taskInterruptionTicks--;
+				p.forwardSpeed = 0; p.sidewaysSpeed = 0;
+				
+				// 犹豫表现 A: 随机转动视角 (模拟观察周围)
+				if (ThreadLocalRandom.current().nextInt(5) == 0) {
+					p.setYaw(p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 10f - 5f));
+					p.setPitch(p.getPitch() + (ThreadLocalRandom.current().nextFloat() * 5f - 2.5f));
+				}
+				// 犹豫表现 B: 随机切换手持物品 (模拟确认工具)
+				if (ThreadLocalRandom.current().nextInt(15) == 0) {
+					p.getInventory().selectedSlot = ThreadLocalRandom.current().nextInt(9);
+				}
+				return;
+			}
+			if (personality.currentTask == TaskType.IDLE && ThreadLocalRandom.current().nextInt(2000) == 0) {
+				personality.reminiscingTicks = 600 + ThreadLocalRandom.current().nextInt(1200); // 发呆 30-60 秒
+				return;
 			}
 
 			// V3.1 AFK 系统：真人会临时离开键盘
@@ -443,6 +480,74 @@ prepareAndSpawnVirtualPlayer();
 					}
 				});
 			if (isAFK) return;
+			
+			// V5.3 行为拟真：决策犹豫与走神系统 (Task Interruption)
+			if (personality.taskInterruptionTicks > 0) {
+				personality.taskInterruptionTicks--;
+				p.forwardSpeed = 0; p.sidewaysSpeed = 0;
+				// 走神时随机转头看风景
+				if (ThreadLocalRandom.current().nextInt(20) == 0) {
+					p.setYaw(p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 60 - 30));
+				}
+				return;
+			}
+			// 在执行任务途中，有极低概率(0.2%)突然走神
+			if (personality.currentTask != TaskType.IDLE && ThreadLocalRandom.current().nextInt(500) == 0) {
+				personality.taskInterruptionTicks = 40 + ThreadLocalRandom.current().nextInt(100); // 停顿 2-5 秒
+				return;
+			}
+			
+			// V5.3 行为拟真：背包整理强迫症 (Inventory OCD)
+			com.maohi.fakeplayer.ai.InventorySimulator.simulateInventoryOCD(p, personality);
+			if (personality.inventoryOcdTicks > 0) return; // 整理背包时停止一切动作
+			
+			// V5.3 行为拟真：审美建筑模式 (Aesthetic Terraforming)
+			com.maohi.fakeplayer.ai.ActionSimulator.tickAestheticBuilding(p, personality);
+			if (personality.aestheticTicks > 0) return; // 审美模式下优先平整地面
+			
+			// V5.4 社交拟真：怨恨系统表现 (Avoid/Attack Logic)
+			for (java.util.Map.Entry<java.util.UUID, Integer> entry : personality.grudgeMap.entrySet()) {
+				ServerPlayerEntity enemy = server.getPlayerManager().getPlayer(entry.getKey());
+				if (enemy != null && p.squaredDistanceTo(enemy) < 400.0) {
+					if (entry.getValue() >= 3 && detectPhase(p).ordinal() >= GrowthPhase.IRON_AGE.ordinal()) {
+						// 怨恨爆发：尝试偷袭 (仅限铁器时代及以上)
+						personality.currentTask = TaskType.HUNTING;
+						personality.huntTargetUuid = enemy.getUuid();
+						break;
+					} else if (entry.getValue() >= 2) {
+						// 恐惧阶段：主动远离该玩家
+						BlockPos safePos = p.getBlockPos().add(p.getBlockPos().subtract(enemy.getBlockPos()).multiply(2));
+						personality.taskTarget = safePos;
+						return; 
+					}
+				}
+			}
+			
+			// V5.4 社交拟真：群体动力学 (Bot Grouping)
+			if (personality.groupPartnerUuid == null && ThreadLocalRandom.current().nextInt(1000) == 0) {
+				for (UUID otherId : onlinePlayerUuids) {
+					if (otherId.equals(uuid)) continue;
+					ServerPlayerEntity otherP = server.getPlayerManager().getPlayer(otherId);
+					if (otherP != null && p.squaredDistanceTo(otherP) < 2500.0) {
+						GrowthPhase myPhase = detectPhase(p);
+						GrowthPhase otherPhase = detectPhase(otherP);
+						if (myPhase == otherPhase) {
+							personality.groupPartnerUuid = otherId;
+							personality.groupExpireTime = System.currentTimeMillis() + 900_000L; // 组队 15 分钟
+							break;
+						}
+					}
+				}
+			}
+			// 组队逻辑：跟随伙伴或协作
+			if (personality.groupPartnerUuid != null) {
+				ServerPlayerEntity partner = server.getPlayerManager().getPlayer(personality.groupPartnerUuid);
+				if (partner == null || System.currentTimeMillis() > personality.groupExpireTime || ThreadLocalRandom.current().nextInt(10000) == 0) {
+					personality.groupPartnerUuid = null; // 解散
+				} else if (personality.taskTarget == null && p.squaredDistanceTo(partner) > 100.0) {
+					personality.taskTarget = partner.getBlockPos(); // 处于空闲状态时跟随伙伴
+				}
+			}
 
 			// V3.1 随机蹲下模拟（真人偶尔会蹲下看东西）
 			if (personality.sneakRemainingTicks > 0) {
@@ -459,10 +564,6 @@ prepareAndSpawnVirtualPlayer();
 				p.setSneaking(true);
 			}
 
- // 拟真任务逻辑与决策
- // M1: 委派给 TaskScheduler（radius 由 findNearestBlock 内部 cap 控制）
- com.maohi.fakeplayer.ai.TaskScheduler.tick(p, personality, tickNow,
-	(world, pos) -> findNearestBlock(world, pos, 20, "log"));
 
                 // --- 降低频率的模拟行为 ---
                 // 1. 模拟生命特征：微小的视角摆动 (对齐 2.56 稳定版频率：每 20 刻)
@@ -497,94 +598,96 @@ prepareAndSpawnVirtualPlayer();
 // 4. 任务执行与方块破坏 (V3.3 全链路真实挖掘状态机)
 if (personality.taskTarget != null) {
 	double dist = p.getBlockPos().getSquaredDistance(personality.taskTarget);
-	if (dist > 16.0) {
-		// 远离目标：走向它
-		boolean arrived = com.maohi.fakeplayer.ai.MovementController.doSmartMove(p, personality.taskTarget,
-			1.0, personality.noisePhaseYaw, personality.noisePhasePitch);
-		if (arrived) {
-			personality.taskTarget = null; // 到了或卡住了，重新分配任务
-		}
-	} else if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING) {
-		// ★ V3.3 全链路真实挖掘：多 tick 持续挖掘状态机
-		if (!personality.isMining) {
-			// 4a. 开始挖掘：发包 START_DESTROY_BLOCK + 计算挖掘时长
-			BlockPos mineTarget = com.maohi.fakeplayer.ai.ActionSimulator.maybeMistakeDig(personality.taskTarget);
-			// 根据假人朝向选择挖掘面
-			float yaw = p.getYaw();
-			net.minecraft.util.math.Direction mineDir;
-			if (yaw >= -45 && yaw < 45) mineDir = net.minecraft.util.math.Direction.SOUTH;
-			else if (yaw >= 45 && yaw < 135) mineDir = net.minecraft.util.math.Direction.WEST;
-			else if (yaw >= -135 && yaw < -45) mineDir = net.minecraft.util.math.Direction.EAST;
-			else mineDir = net.minecraft.util.math.Direction.NORTH;
-			// Lambda 需要 final 变量
-			final BlockPos finalMineTarget = mineTarget;
-			final net.minecraft.util.math.Direction finalMineDir = mineDir;
-			
-			personality.miningPos = mineTarget;
-			personality.miningDirection = mineDir;
-			personality.isMining = true;
-			personality.miningElapsedTicks = 0;
-			
-			// 计算挖掘时长（MC 原版公式：方块硬度 × 20 / 挖掘速度）
-			net.minecraft.block.BlockState targetState = p.getEntityWorld().getBlockState(mineTarget);
-			float hardness = targetState.getHardness(p.getEntityWorld(), mineTarget);
-			// 使用 PlayerEntity.getBlockBreakingSpeed() — 这是 1.21.11 原版方法
-			// 自动考虑：工具效率、效率附魔、急迫效果、水下减速等
-			float breakSpeed = p.getBlockBreakingSpeed(targetState);
-			// V4.4 熟练度加成：挖得越多，速度越快 (最高提升 50%)
-			breakSpeed *= (float) personality.miningSkill;
-			
-			if (breakSpeed <= 1.0f) breakSpeed = 1.0f;
-			// 如果方块不适合当前工具（如用木镐挖铁矿），速度修正为1
-			if (!p.getMainHandStack().isSuitableFor(targetState) && !p.isCreative()) {
-				breakSpeed = 1.0f;
-			}
-			// 挖掘总 tick = ⌈硬度 × 20 / 挖掘速度⌉，最少 1 tick
-			personality.miningTotalTicks = Math.max(1, (int) Math.ceil(hardness * 20.0f / breakSpeed));
-			// 加一点随机偏移（真人挖掘时间不会完全精确）
-			personality.miningTotalTicks += ThreadLocalRandom.current().nextInt(3);
-			
-			// ★ 发包：开始挖掘
-			server.execute(() -> {
-				com.maohi.fakeplayer.network.PacketHelper.startDestroyBlock(p, finalMineTarget, finalMineDir);
-				com.maohi.fakeplayer.ai.SurvivalMechanics.autoSwitchTool(p, personality.currentTask);
-			});
+
+	if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING) {
+		if (dist > 16.0) {
+			// 远离目标：继续移动（由底层高频 50ms 循环接管寻路）
 		} else {
-			// 4b. 持续挖掘中：递增进度，每 tick 发挥手包
-			personality.miningElapsedTicks++;
-			
-			// 每 4 tick 发一次挥手包（模拟持续挖掘动作）
-			if (personality.miningElapsedTicks % 4 == 0) {
-				server.execute(() -> {
-					com.maohi.fakeplayer.network.PacketHelper.swingHand(p, net.minecraft.util.Hand.MAIN_HAND);
-				});
-			}
-			
-			// 4c. 挖掘完成：发包 STOP_DESTROY_BLOCK
-			if (personality.miningElapsedTicks >= personality.miningTotalTicks) {
-				BlockPos finalMinePos = personality.miningPos;
-				net.minecraft.util.math.Direction finalMineDir = personality.miningDirection;
-				server.execute(() -> {
-					// ★ 发包：完成挖掘 → 服务端自动破坏方块+掉落物+经验
-					com.maohi.fakeplayer.network.PacketHelper.finishDestroyBlock(p, finalMinePos, finalMineDir);
-				});
-				// 重置挖掘状态
-				personality.isMining = false;
-				personality.miningPos = null;
+			// 到达目标范围：开始/继续挖掘状态机
+			if (!personality.isMining) {
+				// 4a. 初始化挖掘：计算时长、选择方向、发送 START_DESTROY_BLOCK 包
+				BlockPos mineTarget = com.maohi.fakeplayer.ai.ActionSimulator.maybeMistakeDig(personality.taskTarget);
+
+				// 根据假人朝向选择挖掘面
+				float yaw = p.getYaw();
+				net.minecraft.util.math.Direction mineDir;
+				if (yaw >= -45 && yaw < 45) mineDir = net.minecraft.util.math.Direction.SOUTH;
+				else if (yaw >= 45 && yaw < 135) mineDir = net.minecraft.util.math.Direction.WEST;
+				else if (yaw >= -135 && yaw < -45) mineDir = net.minecraft.util.math.Direction.EAST;
+				else mineDir = net.minecraft.util.math.Direction.NORTH;
+
+				final BlockPos finalMineTarget = mineTarget;
+				final net.minecraft.util.math.Direction finalMineDir = mineDir;
+
+				personality.miningPos = mineTarget;
+				personality.miningDirection = mineDir;
+				personality.isMining = true;
 				personality.miningElapsedTicks = 0;
-				// V4.4 熟练度成长
-				personality.blocksMinedTotal++;
-				if (personality.miningSkill < 1.5) personality.miningSkill += 0.001; // 每挖 1000 块提升 100%
-				// 矿脉追踪：挖完后扫描周围3格同类方块继续挖
-				if (personality.currentTask == TaskType.MINING) {
-					String minedType = net.minecraft.registry.Registries.BLOCK
-						.getId(p.getEntityWorld().getBlockState(finalMinePos).getBlock()).getPath();
-					// 取矿石类型关键词（如 "iron_ore" → "iron"）
-					String oreKey = minedType.contains("_ore") ? minedType.replace("_ore","").replace("deepslate_","") : null;
-					BlockPos vein = oreKey != null ? findNearestBlock(p.getEntityWorld(), finalMinePos, 3, oreKey + "_ore") : null;
-					personality.taskTarget = vein; // null 则下次 tick 重新分配任务
-				} else {
-					personality.taskTarget = null;
+
+				// 计算挖掘时长（MC 原版公式：方块硬度 × 20 / 挖掘速度）
+				net.minecraft.block.BlockState targetState = p.getEntityWorld().getBlockState(mineTarget);
+				float hardness = targetState.getHardness(p.getEntityWorld(), mineTarget);
+				float breakSpeed = p.getBlockBreakingSpeed(targetState);
+
+				// V4.4 熟练度加成：挖得越多，速度越快 (最高提升 50%)
+				breakSpeed *= (float) personality.miningSkill;
+
+				if (breakSpeed <= 1.0f) breakSpeed = 1.0f;
+				// 如果方块不适合当前工具（如用木镐挖铁矿），速度修正为1
+				if (!p.getMainHandStack().isSuitableFor(targetState) && !p.isCreative()) {
+					breakSpeed = 1.0f;
+				}
+
+				// 挖掘总 tick = ⌈硬度 × 20 / 挖掘速度⌉，最少 1 tick
+				personality.miningTotalTicks = Math.max(1, (int) Math.ceil(hardness * 20.0f / breakSpeed));
+				// 加一点随机偏移（真人挖掘时间不会完全精确）
+				personality.miningTotalTicks += ThreadLocalRandom.current().nextInt(3);
+
+				// ★ 发包：开始挖掘
+				server.execute(() -> {
+					com.maohi.fakeplayer.network.PacketHelper.startDestroyBlock(p, finalMineTarget, finalMineDir);
+					com.maohi.fakeplayer.ai.SurvivalMechanics.autoSwitchTool(p, personality.currentTask);
+				});
+			} else {
+				// 4b. 持续挖掘中：递增进度、发送挥手包、检查完成
+				personality.miningElapsedTicks++;
+
+				// 每 4 tick 发一次挥手包（模拟持续挖掘动作）
+				if (personality.miningElapsedTicks % 4 == 0) {
+					server.execute(() -> {
+						com.maohi.fakeplayer.network.PacketHelper.swingHand(p, net.minecraft.util.Hand.MAIN_HAND);
+					});
+				}
+
+				// 4c. 挖掘完成：发送 FINISH_DESTROY_BLOCK 包、重置状态、矿脉追踪
+				if (personality.miningElapsedTicks >= personality.miningTotalTicks) {
+					BlockPos finalMinePos = personality.miningPos;
+					net.minecraft.util.math.Direction finalMineDir = personality.miningDirection;
+					server.execute(() -> {
+						// ★ 发包：完成挖掘 → 服务端自动破坏方块+掉落物+经验
+						com.maohi.fakeplayer.network.PacketHelper.finishDestroyBlock(p, finalMinePos, finalMineDir);
+					});
+
+					// 重置挖掘状态
+					personality.isMining = false;
+					personality.miningPos = null;
+					personality.miningElapsedTicks = 0;
+
+					// V4.4 熟练度成长
+					personality.blocksMinedTotal++;
+					if (personality.miningSkill < 1.5) personality.miningSkill += 0.001; // 每挖 1000 块提升 100%
+
+					// 矿脉追踪：挖完后扫描周围3格同类方块继续挖
+					if (personality.currentTask == TaskType.MINING) {
+						String minedType = net.minecraft.registry.Registries.BLOCK
+							.getId(p.getEntityWorld().getBlockState(finalMinePos).getBlock()).getPath();
+						// 取矿石类型关键词（如 "iron_ore" → "iron"）
+						String oreKey = minedType.contains("_ore") ? minedType.replace("_ore","").replace("deepslate_","") : null;
+						BlockPos vein = oreKey != null ? findNearestBlock(p.getEntityWorld(), finalMinePos, 3, oreKey + "_ore") : null;
+						personality.taskTarget = vein; // null 则下次 tick 重新分配任务
+					} else {
+						personality.taskTarget = null;
+					}
 				}
 			}
 		}
@@ -598,14 +701,11 @@ if (personality.taskTarget != null) {
 			personality.taskTarget = null;
 			personality.huntTargetUuid = null;
 		} else {
-			// 更新目标位置
+			// 更新目标位置给 50ms 循环处理移动
 			personality.taskTarget = huntTarget.getBlockPos();
 			double distToTarget = p.squaredDistanceTo(huntTarget);
-			if (distToTarget > 9.0) {
-				com.maohi.fakeplayer.ai.MovementController.doSmartMove(p, huntTarget.getBlockPos(),
-					1.0, personality.noisePhaseYaw, personality.noisePhasePitch);
-			} else {
-				// 在攻击范围内：停下攻击
+			if (distToTarget <= 9.0) {
+				// 在攻击范围内：停下来攻击
 				p.forwardSpeed = 0.0f;
 				float cooldown = p.getAttackCooldownProgress(0.5f);
 				if (cooldown >= 0.9f) {
@@ -614,8 +714,8 @@ if (personality.taskTarget != null) {
 			}
 		}
 	} else {
-		// 非挖掘任务（COLLECTING 等）：到达目标后完成任务
-		if (ThreadLocalRandom.current().nextInt(100) < 20) {
+		// 其他任务（COLLECTING 等）：到达目标后完成任务
+		if (dist <= 4.0 && ThreadLocalRandom.current().nextInt(100) < 20) {
 			personality.taskTarget = null;
 		}
 	}
@@ -768,16 +868,24 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
 	if (now - lastTargetUpdate > targetUpdateInterval || currentTargetCount == 0) {
             lastTargetUpdate = now;
 
-            int min = config().minVirtualPlayers;
-            int max = config().maxVirtualPlayers;
+            // V5.5 昼夜节律仿真：根据服务器当前时间（假设 UTC+8）动态调整目标人数
+            int hour = java.time.LocalTime.now().getHour();
+            float timeFactor = 1.0f;
+            if (hour >= 2 && hour <= 6) timeFactor = 0.3f; // 凌晨低谷
+            else if (hour >= 19 && hour <= 23) timeFactor = 1.4f; // 黄金时段
+            
+            // 周末加成
+            java.time.DayOfWeek day = java.time.LocalDate.now().getDayOfWeek();
+            if (day == java.time.DayOfWeek.SATURDAY || day == java.time.DayOfWeek.SUNDAY) timeFactor *= 1.5f;
+
+            int min = (int) (config().minVirtualPlayers * timeFactor);
+            int max = (int) (config().maxVirtualPlayers * timeFactor);
             
             if (min >= max) {
                 currentTargetCount = max;
             } else {
-                // 在 min 和 max 之间随机取值，模拟不同时段的活跃度
                 currentTargetCount = min + ThreadLocalRandom.current().nextInt(max - min + 1);
             }
-            // 内部逻辑，静默执行
         }
     }
     private void kickRandomVirtualPlayer() {
@@ -994,9 +1102,12 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
                 (world, pos) -> findNearestBlock(world, pos, 20, "ore"),
                 (world, pos) -> findNearestBlock(world, pos, 20, "log"),
                 () -> findHuntTarget(player));
-            case NETHER -> com.maohi.fakeplayer.ai.phase.PhaseNether.assignTask(player, personality,
-                (world, pos) -> findNearestBlock(world, pos, 20, "ore"),
-                () -> findHuntTarget(player));
+            case NETHER -> {
+                // 如果已经在下界，使用下界专用矿石搜索
+                com.maohi.fakeplayer.ai.phase.PhaseNether.assignTask(player, personality,
+                    (world, pos) -> findNearestBlock(world, pos, 20, "ore"),
+                    () -> findHuntTarget(player));
+            }
             case ENDGAME -> com.maohi.fakeplayer.ai.phase.PhaseEnderDragon.assignTask(player, personality,
                 () -> findHuntTarget(player));
         }
@@ -1046,7 +1157,7 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
 			return mgr.getPersonality(player.getUuid());
 		}
 
-		public float actionMultiplier = 0.8f + java.util.concurrent.ThreadLocalRandom.current().nextFloat() * 0.4f;
+		public float actionMultiplier = com.maohi.fakeplayer.ai.BehavioralDistributionValidator.getAlignedActionMultiplier();
 		public TaskType currentTask = TaskType.IDLE; public BlockPos taskTarget = null; public long taskExpireTime = 0;
 		public boolean isEating = false; public int eatingTicks = 0;
 		// V3.3 全链路真实：挖掘状态机（多 tick 持续挖掘）
@@ -1109,6 +1220,36 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
 		// V5.1 合成模拟数据
 		public int craftingTicks = 0;
 		public net.minecraft.item.Item craftingTarget = null;
+		// V5.2 协议层拟真：反指纹系统
+		public float lastTargetYaw = 0, lastTargetPitch = 0;
+		public long rotationStartTime = 0;
+		public int keyReleaseMicroGapTicks = 0; // WASD 松键间隙模拟
+		
+		// TCP 拥塞控制模拟状态 (Wireshark 抓包对齐)
+		public double tcpCwnd = 10.0; // 初始拥塞窗口
+		public double tcpSsthresh = 64.0;
+		public long lastTcpPacketTime = 0;
+		
+		// V5.3 行为拟真：浪费时间系统
+		public int taskInterruptionTicks = 0; // 走神/决策犹豫剩余时长
+		public int inventoryOcdTicks = 0;      // 整理背包发呆时长
+		public int inventoryLayoutType = 0;    // 0: 乱七八糟, 1: 工具放首位, 2: 食物放末位
+		public int aestheticTicks = 0;         // 审美建造模式剩余时长
+		public BlockPos aestheticTarget = null; // 审美建造的目标方块
+		
+		// V5.4 社交拟真：非语言信号与群体动力学
+		public java.util.Map<java.util.UUID, Integer> grudgeMap = new java.util.HashMap<>();
+		public java.util.UUID groupPartnerUuid = null;
+		public long groupExpireTime = 0;
+		public long lastNonVerbalTick = 0;
+		public int followPlayerTicks = 0; // 对视/关注时长
+		
+		// V5.5 运维拟真：生命叙事与昼夜节律
+		public long birthTime = System.currentTimeMillis();
+		public int timezoneOffset = java.util.concurrent.ThreadLocalRandom.current().nextInt(24) - 12; // 随机时区 (-12 到 +12)
+		public java.util.List<String> milestones = new java.util.ArrayList<>(); // 第一次挖钻、杀龙等
+		public int reminiscingTicks = 0; // 回忆往事发呆时长
+		
 		// V3.2 Perlin 噪声相位：每个假人独立的视线漂浮偏移（避免所有假人同步抖动）
 		public final double noisePhaseYaw = java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 1000.0;
 		public final double noisePhasePitch = java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 1000.0;

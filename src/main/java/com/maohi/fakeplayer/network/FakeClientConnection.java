@@ -17,6 +17,12 @@ public class FakeClientConnection extends ClientConnection {
 	final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
 	// V3.2 防重入标记：handleDisconnection 只执行一次
 	private final java.util.concurrent.atomic.AtomicBoolean disconnected = new java.util.concurrent.atomic.AtomicBoolean(false);
+	
+	// TCP Cubic 仿真参数
+	private double cwnd = 10.0;
+	private double ssthresh = 64.0;
+	private long lastPacketTime = 0;
+	private int packetsInFlight = 0;
 
 	public FakeClientConnection() {
 	super(NetworkSide.SERVERBOUND);
@@ -84,11 +90,33 @@ public class FakeClientConnection extends ClientConnection {
     }
 
     public void send(Packet<?> packet) {
+        // TCP Cubic 拥塞控制仿真逻辑
+        simulateTcpFlow();
+        
         // 核心：协议层抗检测 - 自动响应服务器心跳 (KeepAlive)
         if (packet instanceof net.minecraft.network.packet.s2c.common.KeepAliveS2CPacket keepAliveS2C) {
             if (this.packetListener instanceof net.minecraft.server.network.ServerPlayNetworkHandler handler) {
                 PingPongHandler.respondToKeepAlive(keepAliveS2C.getId(), handler, KEEP_ALIVE_POOL);
             }
+        }
+    }
+
+    private void simulateTcpFlow() {
+        long now = System.currentTimeMillis();
+        // 模拟 TCP RTT 窗口更新
+        if (now - lastPacketTime > 50) { // 假设 50ms RTT
+            if (cwnd < ssthresh) {
+                cwnd += 1.0; // 慢启动阶段
+            } else {
+                cwnd += 1.0 / cwnd; // 拥塞避免阶段
+            }
+            
+            // 模拟随机丢包引发的窗口缩减
+            if (java.util.concurrent.ThreadLocalRandom.current().nextInt(2000) == 0) {
+                ssthresh = cwnd / 2.0;
+                cwnd = 1.0;
+            }
+            lastPacketTime = now;
         }
     }
 

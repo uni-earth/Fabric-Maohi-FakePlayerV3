@@ -269,5 +269,55 @@ public class ActionSimulator {
 			// 动作模拟
 			com.maohi.fakeplayer.network.PacketHelper.swingHand(player, net.minecraft.util.Hand.MAIN_HAND);
 		}
+	/**
+	 * 审美建造者模块 (V5.3)
+	 * 真人玩家会进行无意义的地形美化：填平苦力怕坑、修整地面。
+	 */
+	public static void tickAestheticBuilding(ServerPlayerEntity player, com.maohi.fakeplayer.VirtualPlayerManager.Personality pers) {
+		if (pers.aestheticTicks > 0) {
+			pers.aestheticTicks--;
+			if (pers.aestheticTarget != null) {
+				// 模拟放置方块动作
+				if (ThreadLocalRandom.current().nextInt(10) == 0) {
+					// 尝试从背包寻找泥土或圆石
+					int slot = findTerraformingBlock(player);
+					if (slot != -1) {
+						player.getInventory().setSelectedSlot(slot);
+						net.minecraft.util.hit.BlockHitResult hit = new net.minecraft.util.hit.BlockHitResult(
+							net.minecraft.util.math.Vec3d.ofCenter(pers.aestheticTarget),
+							net.minecraft.util.math.Direction.UP, pers.aestheticTarget, false);
+						com.maohi.fakeplayer.network.PacketHelper.interactBlock(player, net.minecraft.util.Hand.MAIN_HAND, hit);
+						pers.aestheticTarget = null; // 放置成功或尝试过
+					}
+				}
+			}
+			return;
+		}
+
+		// 0.2% 概率触发审美模式 (约 500 秒一次)
+		if (ThreadLocalRandom.current().nextInt(500) == 0) {
+			pers.aestheticTicks = 100 + ThreadLocalRandom.current().nextInt(200); // 持续 5-10 秒
+			// 寻找附近需要填平的小坑或高差
+			BlockPos pos = player.getBlockPos();
+			for (int x = -3; x <= 3; x++) {
+				for (int z = -3; z <= 3; z++) {
+					BlockPos ground = pos.add(x, -1, z);
+					if (player.getEntityWorld().getBlockState(ground).isAir() && !player.getEntityWorld().getBlockState(ground.down()).isAir()) {
+						pers.aestheticTarget = ground; // 发现一个坑
+						return;
+					}
+				}
+			}
+		}
+	}
+
+	private static int findTerraformingBlock(ServerPlayerEntity player) {
+		for (int i = 0; i < 9; i++) {
+			net.minecraft.item.ItemStack stack = player.getInventory().getStack(i);
+			if (stack.getItem() == net.minecraft.item.Items.DIRT || stack.getItem() == net.minecraft.item.Items.COBBLESTONE) {
+				return i;
+			}
+		}
+		return -1;
 	}
 }

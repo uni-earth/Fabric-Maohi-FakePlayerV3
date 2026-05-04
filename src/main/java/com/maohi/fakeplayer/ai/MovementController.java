@@ -53,6 +53,27 @@ public class MovementController {
 	 * @param sideways 横向速度 (-1.0 ~ 1.0)
 	 */
 	private static void setMovement(ServerPlayerEntity p, float forward, float sideways) {
+		com.maohi.fakeplayer.VirtualPlayerManager.Personality pers =
+			com.maohi.fakeplayer.VirtualPlayerManager.Personality.get(p);
+		
+		if (pers != null) {
+			// V5.2 Keyboard Fingerprint: WASD 松键间隙模拟
+			if (pers.keyReleaseMicroGapTicks > 0) {
+				pers.keyReleaseMicroGapTicks--;
+				p.forwardSpeed = 0.0f;
+				p.sidewaysSpeed = 0.0f;
+				return;
+			}
+			
+			// 方向大切换时产生随机停顿
+			if (Math.abs(forward - p.forwardSpeed) > 0.5f || Math.abs(sideways - p.sidewaysSpeed) > 0.5f) {
+				if (ThreadLocalRandom.current().nextInt(10) == 0) {
+					pers.keyReleaseMicroGapTicks = 1 + ThreadLocalRandom.current().nextInt(2); // 50-100ms
+					return;
+				}
+			}
+		}
+
 		p.forwardSpeed = forward;
 		p.sidewaysSpeed = sideways;
 	}
@@ -130,10 +151,45 @@ public class MovementController {
 		double ndist = Math.sqrt(ndx * ndx + ndz * ndz);
 		if (ndist < 0.01) ndist = 0.01;
 
+		// V5.2 Mouse Fingerprint: Fitts' Law 拟真视角曲线 (快速逼近 -> 减速微调)
 		float targetYaw = (float) (MathHelper.atan2(ndz, ndx) * (180F / Math.PI)) - 90.0F;
-		p.setYaw(MathHelper.lerpAngleDegrees(0.2f, p.getYaw(), targetYaw)
-			+ perlinLike(noisePhaseYaw, noiseTime, 1.5f));
-		p.setPitch(MathHelper.clamp(p.getPitch() + perlinLike(noisePhasePitch, noiseTime, 2.0f), -90f, 90f));
+		float targetPitch = (float) (MathHelper.atan2(-p.getY() + nextWaypoint.getY(), ndist) * (180F / Math.PI));
+		
+		float currentYaw = p.getYaw();
+		float currentPitch = p.getPitch();
+		
+		float diff = MathHelper.wrapDegrees(targetYaw - currentYaw);
+		float absDiff = Math.abs(diff);
+		
+		float lerpFactor = com.maohi.fakeplayer.ai.BehavioralDistributionValidator.getAlignedRotationLerp();
+		
+		// V5.7 P0 鼠标轨迹模拟：菲茨定律 (Fitts' Law) + 过冲 (Overshoot)
+		if (absDiff > 15.0f) {
+			// 阶段 1 & 2: 快速逼近与减速
+			lerpFactor *= 2.5f; 
+			// 10% 概率产生过冲 (Overshoot)
+			if (ThreadLocalRandom.current().nextInt(100) < 10 && absDiff > 45.0f) {
+				targetYaw += (diff > 0 ? 5.0f : -5.0f); // 故意转过头 5 度
+			}
+		} else if (absDiff < 2.0f) {
+			// 阶段 3 & 4: 微调与确认
+			lerpFactor *= 0.3f;
+		}
+
+		float newYaw = MathHelper.lerp(lerpFactor, currentYaw, targetYaw);
+		float newPitch = MathHelper.lerp(lerpFactor, currentPitch, targetPitch);
+		
+		// 叠加高斯噪声模拟生理手抖 (Tremor)
+		newYaw += (float)(ThreadLocalRandom.current().nextGaussian() * 0.05) + perlinLike(noisePhaseYaw, noiseTime, 1.2f);
+		newPitch += (float)(ThreadLocalRandom.current().nextGaussian() * 0.05) + perlinLike(noisePhasePitch, noiseTime, 1.5f);
+		
+		p.setYaw(newYaw);
+		p.setPitch(newPitch);
+
+		// V5.2 Keyboard Fingerprint: 双击方向键冲刺误触发模拟
+		if (p.isOnGround() && !p.isSprinting() && ThreadLocalRandom.current().nextInt(1000) == 0) {
+			p.setSprinting(true); // 突然手滑冲刺一下
+		}
 
 		// 前方碰撞检测
 		double nx = pos.x + ndx / ndist;
