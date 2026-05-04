@@ -4,6 +4,7 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.server.network.ServerPlayerEntity;
+import com.maohi.fakeplayer.VirtualPlayerManager;
 
 import java.util.ArrayList;
 import java.util.Collections;
