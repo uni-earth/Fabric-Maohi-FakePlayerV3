@@ -32,11 +32,11 @@ public class PlayerSpawner {
     public static void prepareAndSpawn(VirtualPlayerManager manager) {
         String name;
 	// 拟真 ID 招募权重：60% 概率优先招募"老玩家"，40% 概率产生新玩家
-	List<VirtualPlayerManager.SavedPlayer> candidates = new ArrayList<>(manager.getKnownPlayers().values());
+	List<SavedPlayer> candidates = new ArrayList<>(manager.getKnownPlayers().values());
 	candidates.removeIf(p -> manager.isVirtualPlayer(p.uuid)); // 排除已经在线的
 
 	if (!candidates.isEmpty() && ThreadLocalRandom.current().nextInt(100) < 60) {
-		VirtualPlayerManager.SavedPlayer oldPlayer = candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
+		SavedPlayer oldPlayer = candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
 		name = oldPlayer.name;
 	} else {
 		MinecraftServer server = manager.getServer();
@@ -61,7 +61,7 @@ public class PlayerSpawner {
         UUID uuid = manager.getNameToUuidIndex().getOrDefault(name, UUID.randomUUID());
         if (server.getPlayerManager().getPlayer(uuid) != null) return; // already online, skip
         
-        VirtualPlayerManager.SavedPlayer saved = manager.getKnownPlayers().get(uuid);
+        SavedPlayer saved = manager.getKnownPlayers().get(uuid);
 
         net.minecraft.server.world.ServerWorld targetWorld = server.getOverworld();
         if (saved != null && saved.dimension != null) {
@@ -134,7 +134,7 @@ public class PlayerSpawner {
 			server.execute(() -> {
 				if (player.isAlive()) {
 					// V5.5 加固：获取当前个性能记录
-					VirtualPlayerManager.Personality personality = manager.getPersonality(player.getUuid());
+					Personality personality = manager.getPersonality(player.getUuid());
 					// 只有【新生成的假人】且【从未注入过物资】时才允许下发
 					if (saved == null && personality != null && !personality.initialLootInjected) {
 						com.maohi.fakeplayer.ai.InventorySimulator.injectRealisticLoot(player, personality);

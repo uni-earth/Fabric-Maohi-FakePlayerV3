@@ -1,6 +1,8 @@
 package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.VirtualPlayerManager;
+import com.maohi.fakeplayer.Personality;
+import com.maohi.fakeplayer.TaskType;
 import com.maohi.fakeplayer.network.PacketHelper;
 import com.maohi.fakeplayer.social.VocabularyBank;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -20,7 +22,7 @@ public class PvpSparring {
 	private static final String[] PVP_WIN = {"ez", "gg", "close one", "nice try", "lmao"};
 	private static final String[] PVP_LOSE = {"gg", "u win", "lag", "im low", "stop"};
 
-	public static void tickSparring(ServerPlayerEntity player, VirtualPlayerManager.Personality personality, long tickNow) {
+	public static void tickSparring(ServerPlayerEntity player, Personality personality, long tickNow) {
 		// 1. 如果已经在切磋状态，执行切磋逻辑
 		if (personality.isSparring) {
 			handleSparring(player, personality, tickNow);
@@ -28,8 +30,8 @@ public class PvpSparring {
 		}
 
 		// 2. 只有在 IDLE 或 EXPLORING 状态才可能触发（不打断挖矿、进食等重要行为）
-		if (personality.currentTask != VirtualPlayerManager.TaskType.IDLE && 
-			personality.currentTask != VirtualPlayerManager.TaskType.EXPLORING) {
+		if (personality.currentTask != TaskType.IDLE && 
+			personality.currentTask != TaskType.EXPLORING) {
 			return;
 		}
 
@@ -48,7 +50,7 @@ public class PvpSparring {
 		List<ServerPlayerEntity> nearbyPlayers = world.getEntitiesByClass(ServerPlayerEntity.class, box, p -> {
 			if (p == player || !p.isAlive()) return false;
 			// 必须是其他假人
-			VirtualPlayerManager.Personality otherPers = VirtualPlayerManager.Personality.get(p);
+			Personality otherPers = Personality.get(p);
 			return otherPers != null;
 		});
 
@@ -56,31 +58,31 @@ public class PvpSparring {
 
 		// 随机选一个目标
 		ServerPlayerEntity target = nearbyPlayers.get(ThreadLocalRandom.current().nextInt(nearbyPlayers.size()));
-		VirtualPlayerManager.Personality targetPers = VirtualPlayerManager.Personality.get(target);
+		Personality targetPers = Personality.get(target);
 
 		// 确保目标也有空，且没有在冷却中
 		if (targetPers == null || targetPers.isSparring || targetPers.isEating || targetPers.isMining) return;
 		if (tickNow - targetPers.lastSparringTick < 18000) return;
-		if (targetPers.currentTask != VirtualPlayerManager.TaskType.IDLE && targetPers.currentTask != VirtualPlayerManager.TaskType.EXPLORING) return;
+		if (targetPers.currentTask != TaskType.IDLE && targetPers.currentTask != TaskType.EXPLORING) return;
 
 		// ★ 双方正式进入切磋状态
 		startSparring(player, personality, target, targetPers, tickNow);
 	}
 
-	private static void startSparring(ServerPlayerEntity player, VirtualPlayerManager.Personality pPers, 
-									  ServerPlayerEntity target, VirtualPlayerManager.Personality tPers, long tickNow) {
+	private static void startSparring(ServerPlayerEntity player, Personality pPers, 
+									  ServerPlayerEntity target, Personality tPers, long tickNow) {
 		pPers.isSparring = true;
 		pPers.sparringTarget = target.getUuid();
 		pPers.sparringStartTick = tickNow;
 		pPers.lastSparringTick = tickNow;
-		pPers.currentTask = VirtualPlayerManager.TaskType.IDLE;
+		pPers.currentTask = TaskType.IDLE;
 		pPers.taskTarget = null;
 
 		tPers.isSparring = true;
 		tPers.sparringTarget = player.getUuid();
 		tPers.sparringStartTick = tickNow;
 		tPers.lastSparringTick = tickNow;
-		tPers.currentTask = VirtualPlayerManager.TaskType.IDLE;
+		tPers.currentTask = TaskType.IDLE;
 		tPers.taskTarget = null;
 
 		// 发起方发一条挑衅消息
@@ -90,7 +92,7 @@ public class PvpSparring {
 		}
 	}
 
-	private static void handleSparring(ServerPlayerEntity player, VirtualPlayerManager.Personality personality, long tickNow) {
+	private static void handleSparring(ServerPlayerEntity player, Personality personality, long tickNow) {
 		ServerPlayerEntity target = Maohi.getVirtualPlayerManager().getServer().getPlayerManager().getPlayer(personality.sparringTarget);
 
 		// ★ 终止条件检查
@@ -136,7 +138,7 @@ public class PvpSparring {
 		}
 	}
 
-	private static void endSparring(ServerPlayerEntity player, VirtualPlayerManager.Personality personality, boolean isLoser) {
+	private static void endSparring(ServerPlayerEntity player, Personality personality, boolean isLoser) {
 		personality.isSparring = false;
 		
 		ServerPlayerEntity target = Maohi.getVirtualPlayerManager().getServer().getPlayerManager().getPlayer(personality.sparringTarget);
@@ -144,7 +146,7 @@ public class PvpSparring {
 		
 		// 通知对方也停止
 		if (target != null && target.isAlive()) {
-			VirtualPlayerManager.Personality tPers = VirtualPlayerManager.Personality.get(target);
+			Personality tPers = Personality.get(target);
 			if (tPers != null && tPers.isSparring) {
 				tPers.isSparring = false;
 				tPers.sparringTarget = null;

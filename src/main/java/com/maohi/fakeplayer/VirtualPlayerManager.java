@@ -857,174 +857,8 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
 		}
 	}
 
-	public static class SavedPlayer {
-		public volatile UUID uuid; public volatile String name; public volatile Personality personality; public volatile long totalPlaytime;
-		public volatile double x, y, z; public volatile String dimension;
-		public java.util.List<String> unlockedAdvancements = new java.util.ArrayList<>();
-		public SavedPlayer() {} // 2.78 Gson 兼容构造
-		public SavedPlayer(UUID u, String n, Personality p) { this.uuid = u; this.name = n; this.personality = p; }
-	}
-
-	public static class Personality {
-		public Personality() {} // 2.78 Gson 兼容构造
-
-		// M2 fix: per-player 攻击计时（从 CombatReflex static 迁移而来）
-		public long lastAttackTick = 0;
-
-		// V5.5 拟真加固：成长阶段追踪
-		public GrowthPhase growthPhase = GrowthPhase.STONE_AGE;
-		public long phaseEnteredAt = 0L;
-		public long firstJoinAt = 0L;
-		public boolean hasMinedDiamondOre = false; // 是否真正挖到过钻石矿，用来限制 Diamonds! 成就
-		public long lastDiamondOreMinedAt = 0L;
-
-		// V5.5: 初始物资注入标记，防止重复发放
-		public boolean initialLootInjected = false;
-
-		// V5.17: 成就检查节流时间戳 — 取代不可靠的 totalTicks 模数对齐
-		public long lastAchievementCheck = 0L;
-
-		// V5.19: Adventuring Time 长途旅行支持
-		public java.util.Set<String> visitedBiomes = java.util.concurrent.ConcurrentHashMap.newKeySet();
-		public long lastLongTripStartedAt = 0L;
-		public BlockPos longTripTarget = null;  // 当前远途目的地，到达后清空
-
-		// V5.19: Hero of the Village 支持
-		public BlockPos homeVillagePos = null;        // 关联的村庄中心
-		public long lastVillageCheckAt = 0L;          // 上次扫描村庄时间
-		public long inRaidUntil = 0L;                 // 处于袭击战斗状态的截止时间
-
-		// V5.19: Bring Home the Beacon 子状态机
-		public com.maohi.fakeplayer.ai.BeaconQuestStage beaconStage = com.maohi.fakeplayer.ai.BeaconQuestStage.NOT_STARTED;
-		public BlockPos witherBuildPos = null;   // 凋零结构放置位置
-		public BlockPos beaconPlacePos = null;   // 信标放置位置
-		public long beaconStageEnteredAt = 0L;
-
-		// V5.17: 自动冶炼状态机 — 模拟用熔炉烧 raw_iron → iron_ingot
-		public int smeltingTicks = 0;
-
-		/** 根据 ServerPlayerEntity 获取对应 Personality（供 CombatReflex 等外部模块调用） */
-		public static Personality get(ServerPlayerEntity player) {
-			if (player == null) return null;
-			com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
-			if (mgr == null) return null;
-			return mgr.getPersonality(player.getUuid());
-		}
-
-		public float actionMultiplier = com.maohi.fakeplayer.ai.BehavioralDistributionValidator.getAlignedActionMultiplier();
-		public TaskType currentTask = TaskType.IDLE; public BlockPos taskTarget = null; public long taskExpireTime = 0;
-		public boolean isEating = false; public int eatingTicks = 0;
-		// V3.3 全链路真实：挖掘状态机（多 tick 持续挖掘）
-		public boolean isMining = false;          // 是否正在挖掘
-		public BlockPos miningPos = null;          // 当前挖掘的方块坐标
-		public int miningTotalTicks = 0;           // 挖掘总时长（按方块硬度+工具效率计算）
-		public int miningElapsedTicks = 0;         // 已挖了多少 tick
-		public net.minecraft.util.math.Direction miningDirection = net.minecraft.util.math.Direction.NORTH; // 挖掘面朝方向
-		// V3.3 全链路真实：使用物品状态
-		public boolean isDrinkingPotion = false;   // 是否正在喝药水
-		public long lastCommandTime = 0;
-		// 记录本会话是否已经拿过成就，防止连跳
-		public boolean hasUnlockedThisSession = false;
-		// 2.78 线程安全加固：使用 ConcurrentSet 防止异步保存时产生 ConcurrentModificationException
-		public java.util.Set<String> unlockedAdvancements = java.util.concurrent.ConcurrentHashMap.newKeySet();
-		// V3.1 操作延迟：假人不会"零延迟"反应
-		public int reactionDelayTicks = 0; // 剩余反应延迟 tick 数
-		// V3.1 AFK 系统：临时离开键盘
-		public boolean isAFK = false;
-		public int afkRemainingTicks = 0; // AFK 剩余 tick 数
-		public long nextAFKTime = 0; // 下次可能进入 AFK 的时间
-		// V3.1 偶尔蹲下状态
-		public boolean isSneaking = false;
-		public int sneakRemainingTicks = 0;
-		// V3.2 语义隔离锁：道别后禁言，杜绝穿帮的机械应答
-		public boolean farewellSaid = false;
-		// V3.2 Lag Guard：解冻错峰时间戳，卡顿恢复后随机延迟解冻防止bot聚集效应
-		public long lagFreezeUntil = 0;
-		// V3.2 环境行动：到达目标后需要交互的床位置
-		public BlockPos pendingBedInteraction = null;
-		// V4 P1-2 假人间 PVP 切磋状态
-		public boolean isSparring = false;
-		public java.util.UUID sparringTarget = null;
-		public long sparringStartTick = 0;
-		public long lastSparringTick = 0;
-		// V4 P2-2 驻足看风景状态
-		public int sightseeingTicks = 0;
-		// 记住见过的真玩家名字（最多5个）
-		public java.util.LinkedList<String> knownRealPlayers = new java.util.LinkedList<>();
-		// 猎杀任务目标实体 UUID
-		public java.util.UUID huntTargetUuid = null;
-		// A* 路径缓存：当前正在跟随的路径和目标
-		public java.util.LinkedList<BlockPos> currentPath = new java.util.LinkedList<>();
-		public BlockPos pathGoal = null;
-		
-		// V4.4 进化属性
-		public double miningSkill = 1.0; // 挖掘熟练度 (1.0 - 2.0)
-		public TaskType jobFocus = null; // 职业偏好
-		public long lastDeathTick = 0;   // 上次死亡时间（用于模拟死后沮丧）
-		public int blocksMinedTotal = 0; // 总挖掘数
-		
-		// V5.0 B: 任务队列
-		public static class TaskEntry {
-			public TaskType type;
-			public BlockPos target;
-			public TaskEntry(TaskType t, BlockPos p) { this.type = t; this.target = p; }
-		}
-		public java.util.Queue<TaskEntry> taskQueue = new java.util.LinkedList<>();
-		
-		// V5.1 合成模拟数据
-		public int craftingTicks = 0;
-		public net.minecraft.item.Item craftingTarget = null;
-		// V5.2 协议层拟真：反指纹系统
-		public float lastTargetYaw = 0, lastTargetPitch = 0;
-		public long rotationStartTime = 0;
-		public int keyReleaseMicroGapTicks = 0; // WASD 松键间隙模拟
-		
-		// TCP 拥塞控制模拟状态 (Wireshark 抓包对齐)
-		public double tcpCwnd = 10.0; // 初始拥塞窗口
-		public double tcpSsthresh = 64.0;
-		public long lastTcpPacketTime = 0;
-		
-		// V5.3 行为拟真：浪费时间系统
-		public int taskInterruptionTicks = 0; // 走神/决策犹豫剩余时长
-		public int inventoryOcdTicks = 0;      // 整理背包发呆时长
-		public int inventoryLayoutType = 0;    // 0: 乱七八糟, 1: 工具放首位, 2: 食物放末位
-		public int aestheticTicks = 0;         // 审美建造模式剩余时长
-		public BlockPos aestheticTarget = null; // 审美建造的目标方块
-		
-		// V5.4 社交拟真：非语言信号与群体动力学
-		public java.util.Map<java.util.UUID, Integer> grudgeMap = new java.util.HashMap<>();
-		public java.util.UUID groupPartnerUuid = null;
-		public long groupExpireTime = 0;
-		public long lastNonVerbalTick = 0;
-		public int followPlayerTicks = 0; // 对视/关注时长
-		
-		// V5.5 运维拟真：生命叙事与昼夜节律
-		public long birthTime = System.currentTimeMillis();
-		public int timezoneOffset = java.util.concurrent.ThreadLocalRandom.current().nextInt(24) - 12; // 随机时区 (-12 到 +12)
-		public java.util.List<String> milestones = new java.util.ArrayList<>(); // 第一次挖钻、杀龙等
-		public int reminiscingTicks = 0; // 回忆往事发呆时长
-		
-		// V3.2 Perlin 噪声相位：每个假人独立的视线漂浮偏移（避免所有假人同步抖动）
-		public final double noisePhaseYaw = java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 1000.0;
-		public final double noisePhasePitch = java.util.concurrent.ThreadLocalRandom.current().nextDouble() * 1000.0;
-
-		// mi2 NOTE: Personality 字段已达 30+，Phase C 重构时应拆分为：
-		// CombatState (lastAttackTick, isEating, eatingTicks, isDrinkingPotion)
-		// MovementState (currentTask, taskTarget, taskExpireTime, isMining, miningPos, ...)
-		// SocialState (farewellSaid, lastCommandTime, hasUnlockedThisSession)
-		// 当前暂不拆分，因 Gson 序列化需要 flat 结构
-	}
-
-	public enum TaskType { IDLE, EXPLORING, WOODCUTTING, MINING, COLLECTING, AFK, RECONNECTING, HUNTING, CRAFTING }
-
-	/** 成长阶段：按背包装备自动判断，无需手动设置 */
-	public enum GrowthPhase {
-		STONE_AGE,    // 石器时代：有石器，目标铁矿
-		IRON_AGE,     // 铁器时代：有铁器，目标钻石
-		DIAMOND_AGE,  // 钻石时代：有钻石装备，目标下界
-		NETHER,       // 下界远征：有下界合金，目标末影龙
-		ENDGAME       // 挑战末影龙
-	}
+	// V5.20: SavedPlayer / Personality / TaskEntry / TaskType / GrowthPhase 已提取为
+	//        com.maohi.fakeplayer 下的顶级类型,见同包同名文件。
 
     /**
      * V5.17: 真实化阶段检测 — 维度 + 背包驱动，单向棘轮（只升不降）
@@ -1152,17 +986,17 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
     }
 
     private void tickSurvivalAndProgression(ServerPlayerEntity p, Personality personality) {
-        com.maohi.fakeplayer.ai.SurvivalMechanics.handleSurvival(p, personality);
-        com.maohi.fakeplayer.ai.SurvivalMechanics.autoEquipArmor(p);
+        com.maohi.fakeplayer.ai.EatingBehavior.handleSurvival(p, personality);
+        com.maohi.fakeplayer.ai.EquipmentBehavior.autoEquipArmor(p);
         if (detectPhase(p) == GrowthPhase.STONE_AGE) {
-            com.maohi.fakeplayer.ai.SurvivalMechanics.autoCraftStoneTools(p);
+            com.maohi.fakeplayer.ai.CraftingBehavior.autoCraftStoneTools(p);
         } else {
-            com.maohi.fakeplayer.ai.SurvivalMechanics.autoUpgradeTools(p);
+            com.maohi.fakeplayer.ai.CraftingBehavior.autoUpgradeTools(p);
             // V5.17: IRON_AGE 及以后才尝试自动冶炼（防 STONE_AGE 浪费 raw_iron）
-            com.maohi.fakeplayer.ai.SurvivalMechanics.autoSmeltOres(p);
+            com.maohi.fakeplayer.ai.SmeltingBehavior.autoSmeltOres(p);
         }
-        com.maohi.fakeplayer.ai.SurvivalMechanics.tickCrafting(p, personality);
-        com.maohi.fakeplayer.ai.SurvivalMechanics.tickSmelting(p, personality);
+        com.maohi.fakeplayer.ai.CraftingBehavior.tickCrafting(p, personality);
+        com.maohi.fakeplayer.ai.SmeltingBehavior.tickSmelting(p, personality);
 
         // V5.18: 真实行为里程碑触发器 — 通过执行真实游戏行为让 vanilla 自动触发成就
         com.maohi.fakeplayer.ai.MilestoneActions.tryFillLavaBucket(p, personality);
@@ -1440,7 +1274,7 @@ long minMs = (long)(config().sessionMinMinutes) * 60 * 1000L;
 
             server.execute(() -> {
                 com.maohi.fakeplayer.network.PacketHelper.startDestroyBlock(p, personality.miningPos, personality.miningDirection);
-                com.maohi.fakeplayer.ai.SurvivalMechanics.autoSwitchTool(p, personality.currentTask);
+                com.maohi.fakeplayer.ai.EquipmentBehavior.autoSwitchTool(p, personality.currentTask);
             });
         } else {
             personality.miningElapsedTicks++;

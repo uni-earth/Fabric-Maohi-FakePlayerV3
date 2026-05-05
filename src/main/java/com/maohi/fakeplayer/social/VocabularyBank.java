@@ -181,7 +181,7 @@ public class VocabularyBank {
 	 * ★ P0-2 任务关联型聊天
 	 * 50% 概率根据假人当前的任务说相关的话，50% 概率说通用闲聊
 	 */
-	public static String getChatByTask(com.maohi.fakeplayer.VirtualPlayerManager.TaskType task) {
+	public static String getChatByTask(com.maohi.fakeplayer.TaskType task) {
 		if (task == null) return getConfigChat();
 		
 		if (ThreadLocalRandom.current().nextBoolean()) {

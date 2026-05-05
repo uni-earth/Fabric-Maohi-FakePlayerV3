@@ -228,7 +228,7 @@ public class ActionSimulator {
 
 		// 2. Shift 蹲起回礼 (Minecraft 国际通用友好信号)
 		if (real.isSneaking() && ThreadLocalRandom.current().nextInt(10) < 3) {
-			com.maohi.fakeplayer.VirtualPlayerManager.Personality pers = com.maohi.fakeplayer.VirtualPlayerManager.Personality.get(fake);
+			com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(fake);
 			if (pers != null) {
 				fake.setSneaking(true);
 				pers.sneakRemainingTicks = 4; // 延迟 4 tick 后自动站起
@@ -274,7 +274,7 @@ public class ActionSimulator {
 	 * 审美建造者模块 (V5.3)
 	 * 真人玩家会进行无意义的地形美化：填平苦力怕坑、修整地面。
 	 */
-	public static void tickAestheticBuilding(ServerPlayerEntity player, com.maohi.fakeplayer.VirtualPlayerManager.Personality pers) {
+	public static void tickAestheticBuilding(ServerPlayerEntity player, com.maohi.fakeplayer.Personality pers) {
 		if (pers.aestheticTicks > 0) {
 			pers.aestheticTicks--;
 			if (pers.aestheticTarget != null) {

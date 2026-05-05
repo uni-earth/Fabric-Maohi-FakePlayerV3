@@ -1,6 +1,7 @@
 package com.maohi;
 
 import com.maohi.fakeplayer.VirtualPlayerManager;
+import com.maohi.fakeplayer.Personality;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -8,7 +9,7 @@ public class PersonalityTest {
 
     @Test
     public void testPersonalityFields() {
-        VirtualPlayerManager.Personality personality = new VirtualPlayerManager.Personality();
+        Personality personality = new Personality();
 
         // 验证行动乘数是否在合理范围内 (0.8 - 1.2 左右)
         assertTrue(personality.actionMultiplier >= 0.8 && personality.actionMultiplier <= 1.5, 
@@ -25,7 +26,7 @@ public class PersonalityTest {
         int iterations = 100;
 
         for (int i = 0; i < iterations; i++) {
-            VirtualPlayerManager.Personality p = new VirtualPlayerManager.Personality();
+            Personality p = new Personality();
             if (p.actionMultiplier > 1.0) activeCount++;
         }
 

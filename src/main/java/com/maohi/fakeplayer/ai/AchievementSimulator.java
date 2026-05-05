@@ -1,7 +1,8 @@
 package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.VirtualPlayerManager;
-import com.maohi.fakeplayer.VirtualPlayerManager.Personality;
+import com.maohi.fakeplayer.Personality;
+import com.maohi.fakeplayer.GrowthPhase;
 import net.minecraft.advancement.AdvancementEntry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -71,9 +72,9 @@ public final class AchievementSimulator {
 	}
 
 	/** 仅用于 phase 系统的钻石阶段判定（保留旧 API 兼容） */
-	public static boolean canGrantDiamondAchievement(VirtualPlayerManager.Personality personality) {
+	public static boolean canGrantDiamondAchievement(Personality personality) {
 		if (personality == null) return false;
 		return personality.growthPhase != null
-			&& personality.growthPhase.ordinal() >= VirtualPlayerManager.GrowthPhase.DIAMOND_AGE.ordinal();
+			&& personality.growthPhase.ordinal() >= GrowthPhase.DIAMOND_AGE.ordinal();
 	}
 }

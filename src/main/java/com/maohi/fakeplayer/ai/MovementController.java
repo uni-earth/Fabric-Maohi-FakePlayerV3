@@ -53,8 +53,8 @@ public class MovementController {
 	 * @param sideways 横向速度 (-1.0 ~ 1.0)
 	 */
 	private static void setMovement(ServerPlayerEntity p, float forward, float sideways) {
-		com.maohi.fakeplayer.VirtualPlayerManager.Personality pers =
-			com.maohi.fakeplayer.VirtualPlayerManager.Personality.get(p);
+		com.maohi.fakeplayer.Personality pers =
+			com.maohi.fakeplayer.Personality.get(p);
 		
 		if (pers != null) {
 			// V5.2 Keyboard Fingerprint: WASD 松键间隙模拟
@@ -87,8 +87,8 @@ public class MovementController {
 			double noisePhaseYaw, double noisePhasePitch) {
 		if (target == null) { stopMovement(p); return true; }
 
-		com.maohi.fakeplayer.VirtualPlayerManager.Personality pers =
-			com.maohi.fakeplayer.VirtualPlayerManager.Personality.get(p);
+		com.maohi.fakeplayer.Personality pers =
+			com.maohi.fakeplayer.Personality.get(p);
 
 		// V5.0 A: 物理跳跃检测 (识别 1 格坑)
 		BlockPos ahead = p.getBlockPos().offset(p.getHorizontalFacing());

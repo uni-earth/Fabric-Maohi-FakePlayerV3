@@ -24,7 +24,7 @@ public class CombatReflex {
 	private static final float ATTACK_COOLDOWN_THRESHOLD = 0.9f;
 
 	/** 上次攻击的 tick（per-player，移入 Personality 避免多假人共享冲突） */
-	// NOTE: lastAttackTick 已迁至 VirtualPlayerManager.Personality.lastAttackTick
+	// NOTE: lastAttackTick 已迁至 com.maohi.fakeplayer.Personality.lastAttackTick
 
 	/**
 	 * 执行战斗扫描与自卫动作
@@ -96,7 +96,7 @@ public class CombatReflex {
 						
 						com.maohi.fakeplayer.VirtualPlayerManager vpm = com.maohi.Maohi.getVirtualPlayerManager();
 						if (vpm != null) {
-							com.maohi.fakeplayer.VirtualPlayerManager.Personality pers = vpm.getPersonality(player.getUuid());
+							com.maohi.fakeplayer.Personality pers = vpm.getPersonality(player.getUuid());
 							if (pers != null) {
 								pers.lastAttackTick = player.getEntityWorld().getServer().getTicks();
 							}

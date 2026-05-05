@@ -5,6 +5,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.server.network.ServerPlayerEntity;
 import com.maohi.fakeplayer.VirtualPlayerManager;
+import com.maohi.fakeplayer.Personality;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -45,7 +46,7 @@ public class InventorySimulator {
 	 * 这是已知权衡——新号首次进服无法走 ItemEntity 拾取（没有来源实体）。
 	 * 长期方案：模拟地面掉落 → onPlayerCollision 拾取（待 Phase C 评估）。
 	 */
-	public static void injectRealisticLoot(ServerPlayerEntity player, VirtualPlayerManager.Personality personality) {
+	public static void injectRealisticLoot(ServerPlayerEntity player, Personality personality) {
 		if (personality != null && personality.initialLootInjected) return;
 		// 如果背包里已经有东西了（可能是读取了以前的存档），就不全盘覆盖，只在后面追加
 		if (!player.getInventory().isEmpty()) return;
@@ -190,7 +191,7 @@ public class InventorySimulator {
 	 * 模拟真人强迫症：整理背包（V5.3）
 	 * 并不是实质性的排序，而是随机交换两个物品的位置，模拟正在挑选或调整布局的行为。
 	 */
-	public static void simulateInventoryOCD(ServerPlayerEntity player, com.maohi.fakeplayer.VirtualPlayerManager.Personality pers) {
+	public static void simulateInventoryOCD(ServerPlayerEntity player, com.maohi.fakeplayer.Personality pers) {
 		if (pers.inventoryOcdTicks > 0) {
 			pers.inventoryOcdTicks--;
 			// 模拟整理：随机交换两个槽位（快捷栏或背包）

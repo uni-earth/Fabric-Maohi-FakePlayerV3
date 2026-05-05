@@ -3,6 +3,7 @@ package com.maohi.fakeplayer.social;
 import com.maohi.fakeplayer.network.FakeClientConnection;
 import com.maohi.fakeplayer.TimingConstants;
 import com.maohi.fakeplayer.VirtualPlayerManager;
+import com.maohi.fakeplayer.Personality;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import java.util.UUID;
@@ -29,7 +30,7 @@ public class SocialEngine {
         if (content.toLowerCase().matches(".*(hi|hello|yo|hey).*")) {
             for (UUID id : manager.getOnlinePlayerUuids()) {
                 ServerPlayerEntity p = manager.getServer().getPlayerManager().getPlayer(id);
-                VirtualPlayerManager.Personality personality = manager.getPersonality(id);
+                Personality personality = manager.getPersonality(id);
 
                 if (p != null && personality != null && !personality.farewellSaid && p.squaredDistanceTo(sender) < 225
                     && System.currentTimeMillis() - personality.lastCommandTime > TimingConstants.NEARBY_GREET_COOLDOWN) {
@@ -50,7 +51,7 @@ public class SocialEngine {
         }
     }
 
-    private void rememberPlayer(VirtualPlayerManager.Personality personality, String name) {
+    private void rememberPlayer(Personality personality, String name) {
         if (personality.knownRealPlayers.contains(name)) return;
         if (personality.knownRealPlayers.size() >= 5) personality.knownRealPlayers.removeFirst();
         personality.knownRealPlayers.addLast(name);
@@ -62,7 +63,7 @@ public class SocialEngine {
         if (source != null && source.getAttacker() instanceof ServerPlayerEntity killer) {
             UUID killerUuid = killer.getUuid();
             if (!manager.isVirtualPlayer(killerUuid)) {
-                VirtualPlayerManager.Personality victimPers = manager.getPersonality(victim.getUuid());
+                Personality victimPers = manager.getPersonality(victim.getUuid());
                 if (victimPers != null) {
                     int count = victimPers.grudgeMap.getOrDefault(killerUuid, 0) + 1;
                     victimPers.grudgeMap.put(killerUuid, count);
@@ -78,7 +79,7 @@ public class SocialEngine {
 
         for (UUID id : manager.getOnlinePlayerUuids()) {
             ServerPlayerEntity p = manager.getServer().getPlayerManager().getPlayer(id);
-            VirtualPlayerManager.Personality personality = manager.getPersonality(id);
+            Personality personality = manager.getPersonality(id);
             
             if (p != null && p.squaredDistanceTo(victim) < 100 && ThreadLocalRandom.current().nextInt(100) < 30) {
                 if (personality != null && !personality.farewellSaid && System.currentTimeMillis() - personality.lastCommandTime > TimingConstants.FAREWELL_LOCK_DURATION) {
@@ -160,7 +161,7 @@ public class SocialEngine {
         // V5.4 非语言社交信号：蹲起问候与对视
         for (UUID id : manager.getOnlinePlayerUuids()) {
             ServerPlayerEntity p = manager.getServer().getPlayerManager().getPlayer(id);
-            VirtualPlayerManager.Personality pers = manager.getPersonality(id);
+            Personality pers = manager.getPersonality(id);
             if (p == null || pers == null || pers.isAFK) continue;
 
             // 寻找附近的目标 (优先真玩家，无真玩家时寻找其他假人)

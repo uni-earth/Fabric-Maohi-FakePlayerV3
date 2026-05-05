@@ -1,6 +1,8 @@
 package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.VirtualPlayerManager;
+import com.maohi.fakeplayer.Personality;
+import com.maohi.fakeplayer.TaskType;
 import com.maohi.fakeplayer.network.PacketHelper;
 import com.maohi.mixin.PlayerInventoryAccessor;
 import net.minecraft.entity.player.PlayerInventory;
@@ -25,10 +27,10 @@ public class BlockPlacer {
 	 * 检查并尝试放置火把
 	 * 触发条件：正在挖矿 + 环境太暗 + 包里有火把
 	 */
-	public static void tryPlaceTorch(ServerPlayerEntity player, VirtualPlayerManager.Personality personality) {
+	public static void tryPlaceTorch(ServerPlayerEntity player, Personality personality) {
 		// 1. 只有挖矿或探索状态才会插火把
-		if (personality.currentTask != VirtualPlayerManager.TaskType.MINING && 
-			personality.currentTask != VirtualPlayerManager.TaskType.EXPLORING) {
+		if (personality.currentTask != TaskType.MINING && 
+			personality.currentTask != TaskType.EXPLORING) {
 			return;
 		}
 

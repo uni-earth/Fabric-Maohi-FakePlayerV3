@@ -1,9 +1,9 @@
 package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.VirtualPlayerManager;
-import com.maohi.fakeplayer.VirtualPlayerManager.Personality;
-import com.maohi.fakeplayer.VirtualPlayerManager.TaskType;
-import com.maohi.fakeplayer.VirtualPlayerManager.GrowthPhase;
+import com.maohi.fakeplayer.Personality;
+import com.maohi.fakeplayer.TaskType;
+import com.maohi.fakeplayer.GrowthPhase;
 import com.maohi.fakeplayer.network.PacketHelper;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.EntityType;
@@ -311,7 +311,7 @@ public final class BeaconQuest {
             enterStage(personality, BeaconQuestStage.BUILDING_PYRAMID);
             return;
         }
-        // 逻辑交由 SurvivalMechanics.tickCrafting 处理，此处仅检查
+        // 逻辑交由 CraftingBehavior.tickCrafting 处理，此处仅检查
     }
 
     private static void tickBuildingPyramid(ServerPlayerEntity player, Personality personality, ServerWorld world) {

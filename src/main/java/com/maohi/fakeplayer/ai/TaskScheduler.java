@@ -1,8 +1,8 @@
 package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.VirtualPlayerManager;
-import com.maohi.fakeplayer.VirtualPlayerManager.Personality;
-import com.maohi.fakeplayer.VirtualPlayerManager.TaskType;
+import com.maohi.fakeplayer.Personality;
+import com.maohi.fakeplayer.TaskType;
 import com.maohi.fakeplayer.TimingConstants;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;

@@ -1,7 +1,9 @@
 package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.VirtualPlayerManager;
-import com.maohi.fakeplayer.VirtualPlayerManager.Personality;
+import com.maohi.fakeplayer.Personality;
+import com.maohi.fakeplayer.TaskType;
+import com.maohi.fakeplayer.GrowthPhase;
 import com.maohi.fakeplayer.network.PacketHelper;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.passive.AnimalEntity;
@@ -63,7 +65,7 @@ public final class MilestoneActions {
 		double distSq = player.squaredDistanceTo(Vec3d.ofCenter(lavaPos));
 		if (distSq > 16.0) {
 			personality.taskTarget = lavaPos;
-			personality.currentTask = VirtualPlayerManager.TaskType.EXPLORING;
+			personality.currentTask = TaskType.EXPLORING;
 			personality.taskExpireTime = System.currentTimeMillis() + 30_000L;
 			return;
 		}
@@ -96,7 +98,7 @@ public final class MilestoneActions {
 		if (ThreadLocalRandom.current().nextInt(6000) != 0) return;
 		// 末影之眼是地面阶段后期物品，过早扔不合理
 		if (personality.growthPhase == null
-			|| personality.growthPhase.ordinal() < VirtualPlayerManager.GrowthPhase.NETHER.ordinal()) return;
+			|| personality.growthPhase.ordinal() < GrowthPhase.NETHER.ordinal()) return;
 
 		PlayerInventory inv = player.getInventory();
 		int eyeSlot = findItemSlot(inv, Items.ENDER_EYE);
@@ -163,7 +165,7 @@ public final class MilestoneActions {
 		double distSq = player.squaredDistanceTo(first);
 		if (distSq > 9.0) {
 			personality.taskTarget = first.getBlockPos();
-			personality.currentTask = VirtualPlayerManager.TaskType.EXPLORING;
+			personality.currentTask = TaskType.EXPLORING;
 			personality.taskExpireTime = System.currentTimeMillis() + 30_000L;
 			return;
 		}
@@ -218,7 +220,7 @@ public final class MilestoneActions {
 
 		personality.longTripTarget = far;
 		personality.taskTarget = far;
-		personality.currentTask = VirtualPlayerManager.TaskType.EXPLORING;
+		personality.currentTask = TaskType.EXPLORING;
 		personality.taskExpireTime = System.currentTimeMillis() + 1_800_000L; // 30 分钟超时
 		personality.lastLongTripStartedAt = System.currentTimeMillis();
 	}
