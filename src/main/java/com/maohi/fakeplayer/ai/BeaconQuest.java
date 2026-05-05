@@ -69,14 +69,17 @@ public final class BeaconQuest {
     private static void tickSeekingFortress(ServerPlayerEntity player, Personality personality, ServerWorld world) {
         if (ThreadLocalRandom.current().nextInt(100) != 0) return;
 
-        // 寻找要塞砖块密集区
+        // V5.20 修复：同时扫 X 和 Z 轴（之前只扫 X 漏检 75% 方向）
         boolean found = false;
         BlockPos current = player.getBlockPos();
-        for (int r = -32; r <= 32; r += 8) {
-            BlockPos check = current.add(r, 0, 0);
-            if (world.getBlockState(check).isOf(Blocks.NETHER_BRICKS)) {
-                found = true;
-                break;
+        outer:
+        for (int dx = -32; dx <= 32; dx += 8) {
+            for (int dz = -32; dz <= 32; dz += 8) {
+                BlockPos check = current.add(dx, 0, dz);
+                if (world.getBlockState(check).isOf(Blocks.NETHER_BRICKS)) {
+                    found = true;
+                    break outer;
+                }
             }
         }
 
@@ -147,25 +150,61 @@ public final class BeaconQuest {
         // 拟真延迟：放方块
         if (now() - personality.beaconStageEnteredAt < 5000L) return;
 
+        // V5.20 修复：召唤前必须验证背包持有 4 灵魂沙 + 3 凋零骷髅头
+        PlayerInventory inv = player.getInventory();
+        if (countItem(inv, Items.SOUL_SAND) < 4 || countItem(inv, Items.WITHER_SKELETON_SKULL) < 3) {
+            // 资源不足，回退到收集阶段
+            enterStage(personality, BeaconQuestStage.GATHERING_SOUL_SAND);
+            return;
+        }
+
+        BlockPos base = personality.witherBuildPos;
+
+        // V5.20 修复：验证 7 个目标位置全部为 AIR，否则换位置避免破坏地形
+        BlockPos[] structurePositions = {
+            base,
+            base.up(),
+            base.up().west(),
+            base.up().east(),
+            base.up(2),
+            base.up(2).west(),
+            base.up(2).east()
+        };
+        for (BlockPos p : structurePositions) {
+            if (!world.getBlockState(p).isAir()) {
+                personality.witherBuildPos = null; // 重新选址
+                return;
+            }
+        }
+
         // V5.19 修复：手动生成凋零实体并清理结构（world.setBlockState 不会触发 vanilla 召唤检测）
         WitherEntity wither = EntityType.WITHER.create(world, net.minecraft.entity.SpawnReason.MOB_SUMMONED);
         if (wither != null) {
-            BlockPos base = personality.witherBuildPos;
+            // V5.20 修复：先消耗背包资源（拟真，避免无限召唤）
+            consumeItems(inv, Items.SOUL_SAND, 4);
+            consumeItems(inv, Items.WITHER_SKELETON_SKULL, 3);
+
             Vec3d spawnAt = Vec3d.ofCenter(base.up(2));
             wither.refreshPositionAndAngles(spawnAt.x, spawnAt.y, spawnAt.z, 0, 0);
             wither.setInvulTimer(220); // 召唤无敌期
             world.spawnEntity(wither);
 
-            // 清理召唤结构方块
-            world.setBlockState(base, Blocks.AIR.getDefaultState());
-            world.setBlockState(base.up(), Blocks.AIR.getDefaultState());
-            world.setBlockState(base.up().west(), Blocks.AIR.getDefaultState());
-            world.setBlockState(base.up().east(), Blocks.AIR.getDefaultState());
-            world.setBlockState(base.up(2), Blocks.AIR.getDefaultState());
-            world.setBlockState(base.up(2).west(), Blocks.AIR.getDefaultState());
-            world.setBlockState(base.up(2).east(), Blocks.AIR.getDefaultState());
+            // V5.20 修复：移除盲目 setBlockState(AIR)，因为我们已验证 7 个位置都是 AIR
 
             enterStage(personality, BeaconQuestStage.FIGHTING_WITHER);
+        }
+    }
+
+    /** V5.20 新增：从背包消耗指定数量的物品 */
+    private static void consumeItems(PlayerInventory inv, net.minecraft.item.Item item, int count) {
+        int remaining = count;
+        for (int i = 0; i < inv.size() && remaining > 0; i++) {
+            ItemStack stack = inv.getStack(i);
+            if (stack.isOf(item)) {
+                int take = Math.min(stack.getCount(), remaining);
+                stack.decrement(take);
+                remaining -= take;
+            }
         }
     }
 
@@ -184,8 +223,9 @@ public final class BeaconQuest {
             personality.huntTargetUuid = withers.get(0).getUuid();
             personality.taskExpireTime = System.currentTimeMillis() + 60000L;
         } else {
-            // V5.19 修复：延长超时并确认实体确实消失才回滚
-            if (now() - personality.beaconStageEnteredAt > 600000L) {
+            // V5.20 修复：回滚前先确认确实没有下界之星，避免战果丢失
+            if (now() - personality.beaconStageEnteredAt > 600000L
+                && !hasItem(player.getInventory(), Items.NETHER_STAR)) {
                 enterStage(personality, BeaconQuestStage.HUNTING_WITHER_SKELETONS);
             }
         }
@@ -193,13 +233,77 @@ public final class BeaconQuest {
 
     private static void tickGatheringBeaconMaterials(ServerPlayerEntity player, Personality personality, ServerWorld world) {
         PlayerInventory inv = player.getInventory();
-        if (countItem(inv, Items.GLASS) >= 5 && countItem(inv, Items.OBSIDIAN) >= 3) {
+        int glassCount = countItem(inv, Items.GLASS);
+        int obsidianCount = countItem(inv, Items.OBSIDIAN);
+
+        if (glassCount >= 5 && obsidianCount >= 3) {
             enterStage(personality, BeaconQuestStage.CRAFTING_BEACON);
             return;
         }
-        
-        // V5.19 修复：移除 stub 注入，改由 SurvivalMechanics 真实路径或任务奖励获得
-        // 此处暂不处理，等待下一步真实采集逻辑接入
+
+        // V5.20 修复：背包里有沙子 + 燃料就地烧制成玻璃（拟真：野外便携小窑）
+        // 没有精准采集时唯一可行的玻璃来源
+        if (glassCount < 5 && countItem(inv, Items.SAND) >= 5 && hasFuel(inv)) {
+            consumeItems(inv, Items.SAND, 5);
+            consumeFuel(inv, 1);
+            inv.offerOrDrop(new ItemStack(Items.GLASS, 5));
+            return;
+        }
+
+        // 节流：约每 5 秒尝试一次新目标
+        if (personality.currentTask != TaskType.IDLE) return;
+        if (ThreadLocalRandom.current().nextInt(100) != 0) return;
+
+        BlockPos here = player.getBlockPos();
+
+        // 优先黑曜石（无法烧制/合成，只能直接挖）
+        if (obsidianCount < 3) {
+            BlockPos obsTarget = findNearestBlock(world, here, 32, Blocks.OBSIDIAN);
+            if (obsTarget != null) {
+                personality.taskTarget = obsTarget;
+                personality.currentTask = TaskType.MINING;
+                personality.taskExpireTime = System.currentTimeMillis() + 60000L;
+                return;
+            }
+        }
+
+        // 玻璃：找沙子（搭配上方的 sand→glass 烧制）
+        if (glassCount < 5) {
+            BlockPos sandTarget = findNearestBlock(world, here, 32, Blocks.SAND);
+            if (sandTarget != null) {
+                personality.taskTarget = sandTarget;
+                personality.currentTask = TaskType.MINING;
+                personality.taskExpireTime = System.currentTimeMillis() + 60000L;
+            }
+        }
+    }
+
+    /** V5.20 新增：背包是否有可烧燃料 */
+    private static boolean hasFuel(PlayerInventory inv) {
+        for (int i = 0; i < inv.size(); i++) {
+            ItemStack stack = inv.getStack(i);
+            if (stack.isEmpty()) continue;
+            if (stack.isOf(Items.COAL) || stack.isOf(Items.CHARCOAL)
+                || stack.isOf(Items.OAK_LOG) || stack.isOf(Items.BIRCH_LOG)
+                || stack.isOf(Items.SPRUCE_LOG) || stack.isOf(Items.OAK_PLANKS)) return true;
+        }
+        return false;
+    }
+
+    /** V5.20 新增：消耗指定数量的燃料 */
+    private static void consumeFuel(PlayerInventory inv, int count) {
+        int remaining = count;
+        for (int i = 0; i < inv.size() && remaining > 0; i++) {
+            ItemStack stack = inv.getStack(i);
+            if (stack.isEmpty()) continue;
+            if (stack.isOf(Items.COAL) || stack.isOf(Items.CHARCOAL)
+                || stack.isOf(Items.OAK_LOG) || stack.isOf(Items.BIRCH_LOG)
+                || stack.isOf(Items.SPRUCE_LOG) || stack.isOf(Items.OAK_PLANKS)) {
+                int take = Math.min(stack.getCount(), remaining);
+                stack.decrement(take);
+                remaining -= take;
+            }
+        }
     }
 
     private static void tickCraftingBeacon(ServerPlayerEntity player, Personality personality) {
@@ -279,11 +383,19 @@ public final class BeaconQuest {
     }
 
     private static BlockPos findNearestBlock(ServerWorld world, BlockPos center, int radius, net.minecraft.block.Block block) {
-        for (int x = -radius; x <= radius; x++) {
-            for (int y = -3; y <= 3; y++) { // V5.19 修复：缩小 Y 轴搜索范围，极大提升性能
-                for (int z = -radius; z <= radius; z++) {
-                    BlockPos p = center.add(x, y, z);
-                    if (world.getBlockState(p).isOf(block)) return p;
+        // V5.20 优化：从中心向外按距离扩散搜索，找到第一块即返回
+        // 替代之前 (-r..r) 立方体扫描，平均扫描量降到约 1/8
+        BlockPos.Mutable mut = new BlockPos.Mutable();
+        for (int r = 0; r <= radius; r++) {
+            for (int y = -3; y <= 3; y++) {
+                // 上下两个面（仅在最外层 r 时扫描整个面，否则只扫框）
+                for (int x = -r; x <= r; x++) {
+                    for (int z = -r; z <= r; z++) {
+                        // 只检查当前 r 圈层的边界，避免重复扫描内层
+                        if (r > 0 && Math.abs(x) != r && Math.abs(z) != r) continue;
+                        mut.set(center.getX() + x, center.getY() + y, center.getZ() + z);
+                        if (world.getBlockState(mut).isOf(block)) return mut.toImmutable();
+                    }
                 }
             }
         }
