@@ -191,13 +191,14 @@ public final class PhaseDiamondAge implements Phase {
     /**
      * V5.23: 地表探索目标 — 用 getSafeTopY 锁定可达地面,避免给 player.getY 平面随机点
      * (洞穴/水下/天空时该平面无法走到)。
+     * V5.24: 传 player.getBlockY() 作 fallback,chunk 未加载时不会把目标拉到 Y=-64 虚空。
      */
     private static BlockPos surfacePoint(ServerWorld world, ServerPlayerEntity player, int radius) {
         int dx = ThreadLocalRandom.current().nextInt(radius * 2 + 1) - radius;
         int dz = ThreadLocalRandom.current().nextInt(radius * 2 + 1) - radius;
         int x = player.getBlockX() + dx;
         int z = player.getBlockZ() + dz;
-        int y = PathfindingNavigation.getSafeTopY(world, x, z);
+        int y = PathfindingNavigation.getSafeTopY(world, x, z, player.getBlockY());
         return new BlockPos(x, y, z);
     }
 

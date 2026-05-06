@@ -8,8 +8,6 @@ Fabric 配置：依赖 Fabric-API 0.136.0 与 Loader 0.19.2 及以上。
 
 **安装说明：将自行编译产生的 `Maohi.jar` 连同下载好的 `fabric-api.jar` 均放置于服务器的 `mods` 文件夹内。**
 
-**V5.7 新增**：机器学习对抗系统、菲茨定律鼠标轨迹、过冲模拟、昼夜节律、任务关联聊天
-
 ---
 
 ## 🤖 虚拟玩家拟真系统 (Virtual Player System)
@@ -40,32 +38,6 @@ Fabric 配置：依赖 Fabric-API 0.136.0 与 Loader 0.19.2 及以上。
 *   **PVP 矢量预判攻击**：战斗中不再死板瞄准当前位置，而是根据目标的运动速度向量，预判其 0.2 秒后的位置进行”提前量”打击。
 *   **本能避险机制**：寻路代价函数中集成了火焰、岩浆、岩浆块（烫脚）及高处坠落检测，假人会像真人一样本能地绕开危险区域。
 
-#### 4. 机器学习对抗系统 (V5.6-V5.7) ⭐ NEW
-*   **行为向量对齐 (BehavioralDistributionValidator)**：使用 Box-Muller 变换生成真正的正态分布随机数
-    - 移动速度：1.0 ± 0.15（符合真实玩家分布）
-    - 视角转速：0.2 ± 0.05（对齐人类基准）
-    - 反应延迟：350ms ± 120ms（真实点击间隔）
-    - 限制在 ±0.5 标准差内，防止极端异常值
-*   **菲茨定律鼠标轨迹 (Fitts' Law + Overshoot)**：
-    - 4 阶段视角转动：快速逼近 → 减速进入 → 微调确认 → 生理手抖
-    - 10% 概率过冲：故意转过头 5 度（真人常见现象）
-    - 高斯噪声 + Perlin 噪声：模拟生理颤抖
-    - 完全无法被行为分析检测
-*   **昼夜节律仿真 (Circadian Rhythm)**：
-    - 凌晨 2-6 点迷糊期：反应延迟 +30%，移动速度 -30%
-    - 年龄因子：存活 50+ 天的老玩家动作更精准，速度 -15%
-    - 两者叠加最多降低 50%（完全像真人）
-*   **任务关联型聊天**：假人会根据当前任务自动聊天
-    - 挖矿时说挖矿相关的话
-    - 砍树时说砍树相关的话
-    - 1% 概率自发闲聊，社交冷却防止话痨
-
-#### 5. 群体社交动力学 (V5.4+)
-*   **双目标社交互动**：优先与真玩家互动，无真玩家时与其他假人互动
-*   **蹲起问候**：40% 概率，冷却 1 分钟
-*   **眼神接触**：目标盯着看 3 秒后回望
-*   **怨恨系统**：被击杀 3 次会标记为死对头，铁器时代及以上会尝试反击
-*   **群体组队**：同阶段假人自动组队 15 分钟，空闲时跟随伙伴
 
 ### ⚙️ 业务配置参数 (`mods/server-util.json`)
 
@@ -74,8 +46,8 @@ Fabric 配置：依赖 Fabric-API 0.136.0 与 Loader 0.19.2 及以上。
 | 参数名 | 默认值 | 描述 |
 |--------|--------|------|
 | `botEnabled` | `true` | **假人总开关** (true: 开启, false: 禁用并清场) |
-| `maxVirtualPlayers` | `6` | 假人最大并发在线容量 |
-| `minVirtualPlayers` | `2` | 任何时刻的最少保底在线人数 |
+| `maxVirtualPlayers` | `10` | 假人最大并发在线容量 |
+| `minVirtualPlayers` | `5` | 任何时刻的最少保底在线人数 |
 | `sessionMinMinutes` | `120` | 常规会话时长下限（约 98% 假人落在这段，默认 2h） |
 | `sessionMaxMinutes` | `240` | 常规会话时长上限（约 98% 假人落在这段，默认 4h） |
 | `sessionShortPercent` / `sessionShortMin/MaxMinutes` | `1%` / `45~75` | 短会话段：约 1% 假人一小时内就下线（模拟"上线看看就走"） |
@@ -226,69 +198,6 @@ Fabric-Maohi-FakePlayerV3/
 | 🔒 | 锁定 | 隐蔽部署/隧道层等业主保留模块,不在本轮优化范围 |
 | ⚪ | 待优化 | 未做专项优化,后续按日志/体感继续处理 |
 
-**当前重点统计**
-
-- ✅ 已优化核心: `VirtualPlayerManager`, `PlayerSpawner`, `Personality`, `BlockScanCache`, `SocialEngine`, `ChatResponder`, `LanguagePack`, `EnvironmentSensor`, `MovementController`, `PvpSparring`, `InventorySimulator`, `AFKManager`, `TriggerRegistry`, `PingPongHandler`, `PacketHelper`, `EatingBehavior`, `CombatReflex`, `EquipmentBehavior`, `ActionSimulator`, `HttpUtils`, `BlockPlacer`, `LootTracker`, `PathfindingNavigation`, `SkinService`, `VocabularyBank`, `ProfileFetcher`, `MaohiCommands`, 阶段1-5 全部 Phase(Stone/Iron/Diamond/Nether/EnderDragon),阶段1-4 trigger(含 FormObsidian/BlazeRod)
-- 🧩 已模块化/基础设施: `PlayerStorage`, `FakeClientConnection`, `TaskType`, `GrowthPhase`, `Phase`, `AchievementTrigger`, `TriggerUtil`, `CraftingBehavior`, `SmeltingBehavior`, `AchievementSimulator`, 主要 Mixin Accessor
-- 🧪 需实测长线: `VillageDefender`, `BeaconQuest`
-- 🚧 占位待实现: `EnchantItemTrigger`
-- ⚪ 待专项优化: (无)
-
-
----
-
-## 📋 版本更新日志 (Changelog)
-
-### V5.22 (Latest) - Lag Guard Hardening
-- ✅ **BlockScanCache 壳层扫描**：冷启动最坏 10 万次 `getBlockState` 降到贴脸 O(1)，矿石 Y 深度从 60 压到 20
-- ✅ **processHeavyAILogic 背压**：MSPT>50 轮询 1/3 假人、>35 轮询 1/2；>80 时主循环整体 continue，不再往主线程队列积压
-- ✅ **EnvironmentSensor 降频**：中卡时环境扫描间隔 5s → 15s
-- ✅ **Disconnect 双触发修复**：先 closeChannel 再 onDisconnected，杜绝 "handleDisconnection() called twice" 与重复 "left the game"
-- ✅ **环境抱怨全局去重**：rain/night/fire 三类气候事件 10 分钟窗口内整服最多 2 个假人吐槽，杜绝接力抱怨同一场雨
-- ✅ **基础成就期保护**：石器/铁器阶段不进 AFK、不进回忆模式；PhaseStoneAge 新增 findStone 找到真正的石头方块；PhaseIronAge 找不到铁矿不再瞄准 Y=8 的不可达目标
-- ✅ **成就回流修复**：PlayerSpawner 从 `personality.unlockedAdvancements` 读取，而非从未被写入的 `SavedPlayer.unlockedAdvancements`
-
-### V5.21 - Session Distribution & Milestone Boost
-- ✅ **会话时长三段分布**：1% 约 1 小时下线 / 98% 常规 2–4h 不定时下线 / 1% 挂机党 4–10h（硬上限 10h 防穿帮）
-- ✅ **删除累计在线时长成就门槛**：完全交给 vanilla advancement 驱动，不再按"小时"节流
-- ✅ **基础成就达成率提升**：Hot Stuff / 繁殖动物 / Adventuring Time 节流放宽 3~6 倍；石器/铁器阶段降低走神与网络抖动摸鱼率
-
-### V5.20 - Refactored Architecture Edition
-- ✅ **代码结构整理**:VirtualPlayerManager 从 1513 行瘦身到 ~1260 行
-- ✅ **SurvivalMechanics 拆分**:进食/装备/合成/冶炼 → 4 个独立 Behavior 类
-- ✅ **Personality 提升为顶级类型**:同时提取 SavedPlayer / TaskType / GrowthPhase
-- ✅ **Phase 接口化**:5 个成长阶段统一契约,5-case switch 改为 Map registry 派发
-- ✅ **PlayerStorage 子包**:Gson 持久化逻辑独立(原子写入 + 容量裁剪)
-- ✅ **BlockScanCache 子包**:findNearestBlock 缓存独立(MSPT 自适应半径)
-
-### V5.19 - Long-Quest System
-- ✅ **BeaconQuest**:完整信标长线任务(下界要塞 → 凋零 → 信标)
-- ✅ **VillageDefender**:村庄保卫者(Hero of the Village)
-- ✅ **MilestoneActions**:岩浆桶/末影之眼/繁殖动物/长途旅行
-
-### V5.7 - ML-Proof Anti-Detection Edition
-- ✅ **BehavioralDistributionValidator**: Box-Muller 变换生成正态分布随机数
-- ✅ **MovementController V5.7**: 菲茨定律 + 过冲模拟（4 阶段鼠标轨迹）
-- ✅ **Circadian Rhythm**: 昼夜节律仿真（凌晨迷糊期 -30% 速度）
-- ✅ **Task-Aware Chat**: 任务关联型聊天（根据当前任务自动说话）
-- ✅ **Dual-Target Social**: 假人间社交互动（优先真玩家，无真玩家时与假人互动）
-- ✅ **TCP Cubic Simulation**: 网络拥塞控制仿真
-- ✅ **Phase Expansion**: 末地和下界内容扩展
-
-### V5.6 - Behavioral Distribution Alignment
-- ✅ 行为向量对齐验证器
-- ✅ 空服优化（1Hz 心跳）
-- ✅ 统计基准对齐
-
-### V5.5 - Circadian & Character Arc
-- ✅ 昼夜节律仿真
-- ✅ 角色弧线（年龄影响行为）
-- ✅ 回忆往事系统
-
-### V5.4 - Social Dynamics
-- ✅ 怨恨系统
-- ✅ 群体组队
-- ✅ 非语言社交信号
 
 ---
 

@@ -121,6 +121,14 @@ public final class PhaseEnderDragon implements Phase {
         ScanCache c = SCAN_CACHE.computeIfAbsent(player.getUuid(), k -> new ScanCache());
         if (c.endEnteredAt == 0) c.endEnteredAt = System.currentTimeMillis();
 
+        // V5.24 P2-2: 末地 spawn 黑曜石平台保护 — bot 固定在 (100, 49, 0) 5x5 平台,
+        // 周围全是虚空。任何 EXPLORING 任务都会让 bot 直线走出平台坠虚空死。
+        // 没造桥能力时,锁 IDLE 60s,等会话到期或被 enderman 推下平台,胜过秒掉虚空。
+        if (isOnEndSpawnPlatform(player)) {
+            set(personality, TaskType.IDLE, player.getBlockPos(), 60_000L);
+            return;
+        }
+
         // 1. 找龙
         EnderDragonEntity dragon = findEnderDragon(world);
         if (dragon == null) {
@@ -159,6 +167,19 @@ public final class PhaseEnderDragon implements Phase {
         } else {
             attackEnderDragon(player, personality, dragon);
         }
+    }
+
+    /**
+     * V5.24 P2-2: 是否站在末地 spawn 黑曜石平台上。
+     * vanilla 末地 spawn 固定 (100, 49, 0) 5x5 黑曜石,玩家从主世界传来直接落在这。
+     * 用 ±5 xz / 47-55 y 的范围识别,误判区域非常小(主岛在 (0, ±70, 0) 附近,差 100 格不可能重合)。
+     */
+    private static boolean isOnEndSpawnPlatform(ServerPlayerEntity player) {
+        if (player.getEntityWorld().getRegistryKey() != World.END) return false;
+        BlockPos pos = player.getBlockPos();
+        return Math.abs(pos.getX() - 100) <= 5
+            && Math.abs(pos.getZ()) <= 5
+            && pos.getY() >= 47 && pos.getY() <= 55;
     }
 
     // ============================================================
@@ -299,12 +320,16 @@ public final class PhaseEnderDragon implements Phase {
     /**
      * V5.23: 一次 Box 查询代替 14000 次方块扫描。
      * 末地水晶全在主岛主平台半径 ~70 范围内,用 ±128 Box 绝对覆盖。
+     *
+     * V5.24 P2-3: 过滤被铁笼包裹的水晶 — vanilla End 主岛 4 根中央高塔顶部水晶有 iron_bars
+     * 笼子保护,玩家需先破笼才能近战/弓箭命中。bot 没爬塔/破笼能力,过滤掉省得反复发空包,
+     * 让上层逻辑直接走攻击龙本体路径(虽然也打不过,至少不发徒劳的空射击包)。
      */
     private static EndCrystalEntity findClosestEndCrystal(ServerWorld world, ServerPlayerEntity player) {
         List<EndCrystalEntity> crystals = world.getEntitiesByClass(
             EndCrystalEntity.class,
             new Box(-128, 0, -128, 128, 256, 128),
-            e -> e.isAlive());
+            e -> e.isAlive() && !isCrystalCaged(world, e));
         if (crystals.isEmpty()) return null;
         EndCrystalEntity closest = null;
         double bestDistSq = Double.MAX_VALUE;
@@ -313,6 +338,30 @@ public final class PhaseEnderDragon implements Phase {
             if (d < bestDistSq) { bestDistSq = d; closest = c; }
         }
         return closest;
+    }
+
+    /**
+     * V5.24 P2-3: 水晶是否被铁笼包裹。
+     * vanilla End 主岛中央 4 根塔的水晶顶部有 4-8 个 iron_bars 形成笼子。
+     * 阈值 ≥4 触发 — 主岛外缘的 6 根低塔水晶通常不带笼,会被放行。
+     * 扫描范围 ±2 xz / 0~3 y,贴合 vanilla 笼形状。
+     */
+    private static boolean isCrystalCaged(ServerWorld world, EndCrystalEntity crystal) {
+        BlockPos pos = crystal.getBlockPos();
+        BlockPos.Mutable mut = new BlockPos.Mutable();
+        int barCount = 0;
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dy = 0; dy <= 3; dy++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    mut.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
+                    if (world.getBlockState(mut).isOf(Blocks.IRON_BARS)) {
+                        barCount++;
+                        if (barCount >= 4) return true; // 早返,省 CPU
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private static void attackEndCrystal(ServerPlayerEntity player, Personality personality, EndCrystalEntity crystal) {
@@ -458,12 +507,13 @@ public final class PhaseEnderDragon implements Phase {
     }
 
     /** V5.23: 主世界探索目标 — 锁地面 */
+    /** V5.24: chunk 未加载时回退 player.getBlockY(),不再把假人引向 Y=-64 虚空 */
     private static BlockPos overworldSurfacePoint(ServerWorld world, ServerPlayerEntity player, int radius) {
         int dx = ThreadLocalRandom.current().nextInt(radius * 2 + 1) - radius;
         int dz = ThreadLocalRandom.current().nextInt(radius * 2 + 1) - radius;
         int x = player.getBlockX() + dx;
         int z = player.getBlockZ() + dz;
-        int y = PathfindingNavigation.getSafeTopY(world, x, z);
+        int y = PathfindingNavigation.getSafeTopY(world, x, z, player.getBlockY());
         return new BlockPos(x, y, z);
     }
 

@@ -30,7 +30,9 @@ public final class CraftingBehavior {
 		boolean hasPickaxe = false, hasSword = false, hasAxe = false;
 		for (int i = 0; i < inv.size(); i++) {
 			String id = net.minecraft.registry.Registries.ITEM.getId(inv.getStack(i).getItem()).getPath();
-			if (id.contains("pickaxe")) hasPickaxe = true;
+			// V5.25: 精确匹配 stone+ 镐——wooden_pickaxe 含"pickaxe"会误命中,导致木镐起手假人永远不合成石镐,卡死石器时代
+			if (id.equals("stone_pickaxe") || id.equals("iron_pickaxe")
+				|| id.equals("diamond_pickaxe") || id.equals("netherite_pickaxe")) hasPickaxe = true;
 			if (id.contains("sword")) hasSword = true;
 			if (id.contains("axe") && !id.contains("pickaxe")) hasAxe = true;
 		}

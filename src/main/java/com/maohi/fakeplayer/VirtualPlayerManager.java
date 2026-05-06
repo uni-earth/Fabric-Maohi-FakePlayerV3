@@ -1261,7 +1261,7 @@ prepareAndSpawnVirtualPlayer();
         if (!personality.isMining) {
             BlockPos mineTarget = com.maohi.fakeplayer.ai.ActionSimulator.maybeMistakeDig(personality.taskTarget);
             net.minecraft.util.math.Direction mineDir = getDirectionFromYaw(p.getYaw());
-            
+
             personality.miningPos = mineTarget;
             personality.miningDirection = mineDir;
             personality.isMining = true;
@@ -1274,6 +1274,18 @@ prepareAndSpawnVirtualPlayer();
             if (breakSpeed <= 1.0f) breakSpeed = 1.0f;
 
             personality.miningTotalTicks = Math.max(1, (int) Math.ceil(hardness * 20.0f / breakSpeed)) + ThreadLocalRandom.current().nextInt(3);
+
+            // V5.24 P2-1: 工具不匹配/方块不可破坏时直接放弃,避免徒手挖黑曜石 50 秒静止。
+            // 阈值 200 tick (10 秒) — 与 TASK_TIMEOUT_WORK 45s 配合,挖钻石/铁正常通过,
+            // 挖黑曜石(无钻石镐)、岩浆块(硬度 0.5 但 breakSpeed 可能极低)、bedrock 都被挡住。
+            if (hardness < 0 || personality.miningTotalTicks > 200) {
+                personality.isMining = false;
+                personality.miningPos = null;
+                personality.miningElapsedTicks = 0;
+                personality.currentTask = TaskType.IDLE;
+                personality.taskTarget = null;
+                return;
+            }
 
             server.execute(() -> {
                 com.maohi.fakeplayer.network.PacketHelper.startDestroyBlock(p, personality.miningPos, personality.miningDirection);

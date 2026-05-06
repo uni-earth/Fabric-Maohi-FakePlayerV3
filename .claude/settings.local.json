@@ -22,7 +22,20 @@
       "PowerShell(Remove-Item -Path \"src\\\\main\\\\java\\\\com\\\\maohi\\\\fakeplayer\\\\ai\\\\SurvivalMechanics.java\" -Force; Write-Output \"Deleted: $\\(-not \\(Test-Path 'src\\\\main\\\\java\\\\com\\\\maohi\\\\fakeplayer\\\\ai\\\\SurvivalMechanics.java'\\)\\)\")",
       "PowerShell(.\\\\gradlew.bat compileJava --console=plain 2>&1)",
       "PowerShell(Get-Command gradle -ErrorAction SilentlyContinue)",
-      "Bash(cmd *)"
+      "Bash(cmd *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(Resolve-Path *)",
+      "Bash(./gradlew compileJava --console=plain)",
+      "PowerShell($env:JAVA_HOME; if \\(Test-Path 'C:\\\\Program Files\\\\Java'\\) { Get-ChildItem 'C:\\\\Program Files\\\\Java' -Directory } else { Write-Output 'no Java dir' }; Get-ChildItem 'C:\\\\Program Files' -Directory | Where-Object { $_.Name -match 'jdk|jre|java|adoptium|temurin|oracle' } | Select-Object FullName)",
+      "Bash(awk BEGIN{depth=0} { for\\(i=1;i<=length\\($0\\);i++\\){ c=substr\\($0,i,1\\); if\\(c==\"{\"\\) depth++; else if\\(c==\"}\"\\) depth--; } } END{ print \"final brace depth:\", depth } *)",
+      "Bash(sed -n '1170,1190p' src/main/java/com/maohi/fakeplayer/VirtualPlayerManager.java)",
+      "Bash(sed -n '230,260p' src/main/java/com/maohi/fakeplayer/ai/MovementController.java)",
+      "Bash(sed -n '60,140p' src/main/java/com/maohi/fakeplayer/ai/PathfindingNavigation.java)",
+      "Bash(sed -n '40,80p' src/main/java/com/maohi/fakeplayer/ai/PathfindingNavigation.java)",
+      "Bash(sed -n '180,220p' src/main/java/com/maohi/fakeplayer/ai/PathfindingNavigation.java)",
+      "Bash(sed -n '215,275p' src/main/java/com/maohi/fakeplayer/ai/PathfindingNavigation.java)",
+      "Bash(sed -n '1265,1290p' src/main/java/com/maohi/fakeplayer/VirtualPlayerManager.java)",
+      "Bash(grep -oE '\\\\\\\\\\\\\\\\r|\\\\\\\\\\\\\\\\n')"
     ]
   }
 }

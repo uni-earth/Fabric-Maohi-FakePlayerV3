@@ -113,8 +113,9 @@ public class MaohiCommands {
     private static void registerCommands(CommandDispatcher<ServerCommandSource> dispatcher) {
         dispatcher.register(
             CommandManager.literal("maohi")
-                // OP 等级 4(等于原 OWNERS_CHECK 常量)
-                .requires(src -> src.hasPermissionLevel(4))
+                // OP 等级 4(OWNERS):1.21.11 权限系统重构后,ServerCommandSource 不再有
+                // hasPermissionLevel(int);改用 CommandManager.requirePermissionLevel(OWNERS_CHECK)。
+                .requires(CommandManager.requirePermissionLevel(CommandManager.OWNERS_CHECK))
 
                 // === /maohi status ===
                 .then(CommandManager.literal("status")

@@ -47,20 +47,36 @@ public class PathfindingNavigation {
 	}
 
 	/**
-	 * 获取指定坐标的安全地面高度(对接 1.21.11 物理层)
+	 * 获取指定坐标的安全地面高度(对接 1.21.11 物理层)。
+	 *
+	 * 旧 3-arg 版本:chunk 未加载时回退到 `world.getBottomY()` (-64 / 0)。
+	 * 仅在调用方有自己的范围守卫时才安全使用(如 VPM 高度守卫的 `> 0 && < 100` 过滤,
+	 * 或 PhaseNether.findPortalBuildSpot 的"建造位置不合法就跳过"链路)。
+	 *
+	 * 任务派发(surfacePoint 系列)请改用 {@link #getSafeTopY(ServerWorld,int,int,int)},
+	 * 传 player.getBlockY() 作为 fallback,避免 chunk 未加载时把假人引向 Y=-64 虚空。
 	 */
 	public static int getSafeTopY(ServerWorld world, int x, int z) {
-		// 1.21.11 适配:使用 Chunk-based Heightmap API(旧版 getTopY 已废弃)
+		return getSafeTopY(world, x, z, world.getBottomY());
+	}
+
+	/**
+	 * V5.24: 带 fallbackY 的高度查询。
+	 * - chunk 未加载 → 返 fallbackY
+	 * - heightmap 命中 ≤ bottomY(空气柱,无任何固体方块)→ 也视为无效 → 返 fallbackY
+	 * - 否则返 MOTION_BLOCKING 顶面
+	 */
+	public static int getSafeTopY(ServerWorld world, int x, int z, int fallbackY) {
 		int chunkX = x >> 4;
 		int chunkZ = z >> 4;
 		Chunk chunk = (Chunk) world.getChunkManager().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
-		if (chunk != null) {
-			int localX = x & 15;
-			int localZ = z & 15;
-			return chunk.getHeightmap(Heightmap.Type.MOTION_BLOCKING).get(localX, localZ);
-		}
-		// 回退:使用世界最低 Y 坐标
-		return world.getBottomY();
+		if (chunk == null) return fallbackY;
+		int localX = x & 15;
+		int localZ = z & 15;
+		int height = chunk.getHeightmap(Heightmap.Type.MOTION_BLOCKING).get(localX, localZ);
+		// 整列空气(罕见:洞穴+无地表生成,heightmap 返 bottomY)→ 视为 chunk 未加载
+		if (height <= world.getBottomY()) return fallbackY;
+		return height;
 	}
 
 	/**
@@ -79,19 +95,53 @@ public class PathfindingNavigation {
 			|| world.getBlockState(pos.down()).isOf(net.minecraft.block.Blocks.MAGMA_BLOCK)) {
 			return true;
 		}
+		// 3. V5.25 P4-1: deep water (>=2 block column) - bot has no swim escape, will drown.
+		//    pos is water AND pos.up() is also water => head submerged => danger.
+		//    1-block-deep water (head in air) is allowed by isWalkable separately.
+		net.minecraft.fluid.Fluid posFluid = state.getFluidState().getFluid();
+		if (posFluid.matchesType(net.minecraft.fluid.Fluids.WATER)
+			|| posFluid.matchesType(net.minecraft.fluid.Fluids.FLOWING_WATER)) {
+			net.minecraft.fluid.Fluid upFluid = world.getBlockState(pos.up()).getFluidState().getFluid();
+			if (upFluid.matchesType(net.minecraft.fluid.Fluids.WATER)
+				|| upFluid.matchesType(net.minecraft.fluid.Fluids.FLOWING_WATER)) {
+				return true;
+			}
+		}
 		return false;
 	}
 
 	/**
 	 * 判定某个坐标是否可以行走(地面存在且上方 2 格无遮挡)
+	 *
+	 * V5.24 P1: 加入 1 格深水的可达判定 — 真人能蹚 1 格深水(脚浸水但头出水面),
+	 * 旧实现把任何 isLiquid() 都视为障碍,导致 A* 永远跨不过小溪。
+	 * 仅放行 water,lava 仍然不可达(由 isDangerAhead 兜底)。
+	 *
+	 * 1 格水可达条件: 脚下=固体, 当前格=water, 头顶=air
+	 *  (2 格深水会有 ground=water 命中,自然被排除,bot 不会被引去淹死)
 	 */
 	public static boolean isWalkable(ServerWorld world, BlockPos pos) {
-		BlockPos ground = pos.down();
-		// 脚下必须是实体方块
-		if (world.getBlockState(ground).isAir() || world.getBlockState(ground).isLiquid()) return false;
-		// 上方 2 格必须是空气(玩家身高约 1.8 格)
-		if (!world.getBlockState(pos).isAir()) return false;
-		if (!world.getBlockState(pos.up()).isAir()) return false;
+		net.minecraft.block.BlockState groundState = world.getBlockState(pos.down());
+		net.minecraft.block.BlockState atState = world.getBlockState(pos);
+		net.minecraft.block.BlockState upState = world.getBlockState(pos.up());
+
+		// V5.25 P4-2: ladder column passthrough - vanilla LivingEntity.travel isClimbing() path
+		//   converts forward speed to vertical climb when in a ladder. Allow upState=ladder too,
+		//   so A* can route through stacked ladder blocks (whole column treated as walkable).
+		if (atState.getBlock() instanceof net.minecraft.block.LadderBlock) return true;
+
+		// 头顶必须是空气(玩家身高约 1.8 格)
+		if (!upState.isAir()) return false;
+
+		// V5.24: 1 格水检查 — 脚下固体 + 当前格 water + 头顶 air
+		net.minecraft.fluid.Fluid atFluid = atState.getFluidState().getFluid();
+		boolean atIsWater = atFluid == net.minecraft.fluid.Fluids.WATER
+			|| atFluid == net.minecraft.fluid.Fluids.FLOWING_WATER;
+		if (atIsWater && !groundState.isAir() && !groundState.isLiquid()) return true;
+
+		// 标准平地: 脚下固体 + 当前格 air
+		if (groundState.isAir() || groundState.isLiquid()) return false;
+		if (!atState.isAir()) return false;
 		return true;
 	}
 
@@ -184,9 +234,11 @@ public class PathfindingNavigation {
 	}
 
 	/**
-	 * 邻居探测:平地 + 跳跃上台阶 + 下台阶 + 跨越 2 格(跳过坑)。
+	 * 邻居探测:平地 + 跳跃上台阶 + 下台阶 + 跨越 2 格(跳过坑) + 2 格落差。
 	 * V5.23: 各方向 cost 不再统一为 1,贴合真实玩家:
 	 *   平地 1.0 < 下台阶 1.2 < 跳跃 1.5 < 跨越 2 格 2.4
+	 * V5.24 P1: 加 4 个 down(2) 邻居 — 真人能 2 格无伤坠落。
+	 *   isDangerAhead 阈值是 ≥3 格落,所以 down(2) 不会被它否决,自然走 cost 阶梯。
 	 */
 	private static Neighbor[] getNeighbors(BlockPos pos) {
 		return new Neighbor[] {
@@ -209,7 +261,12 @@ public class PathfindingNavigation {
 			new Neighbor(pos.north(2), 2.4),
 			new Neighbor(pos.south(2), 2.4),
 			new Neighbor(pos.east(2), 2.4),
-			new Neighbor(pos.west(2), 2.4)
+			new Neighbor(pos.west(2), 2.4),
+			// V5.24 P1: 2 格落差(可控坠落不致伤),稍高于 down(1) 的 1.2
+			new Neighbor(pos.north().down(2), 1.4),
+			new Neighbor(pos.south().down(2), 1.4),
+			new Neighbor(pos.east().down(2), 1.4),
+			new Neighbor(pos.west().down(2), 1.4)
 		};
 	}
 

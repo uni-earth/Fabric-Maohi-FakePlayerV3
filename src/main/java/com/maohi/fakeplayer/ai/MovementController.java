@@ -1,9 +1,17 @@
 package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.GrowthPhase;
+import com.maohi.fakeplayer.network.PacketHelper;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.block.DoorBlock;
+import net.minecraft.block.FenceGateBlock;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
@@ -103,6 +111,13 @@ public class MovementController {
 	public static boolean doSmartMove(ServerPlayerEntity p, BlockPos target, double moveStep,
 			double noisePhaseYaw, double noisePhasePitch) {
 		if (target == null) { stopMovement(p); return true; }
+
+		// V5.25 P4-1: bot fell into water - jump() each tick triggers vanilla swim-up impulse
+		// (LivingEntity routes jump to water-rise when isInsideWaterOrBubbleColumn), keeping
+		// the path target intact while preventing drowning at the bottom.
+		if (p.isTouchingWater()) {
+			p.jump();
+		}
 
 		com.maohi.fakeplayer.Personality pers =
 			com.maohi.fakeplayer.Personality.get(p);
@@ -229,11 +244,28 @@ public class MovementController {
 			return true;
 		}
 
-		boolean isBlocked = !world.getBlockState(nextPos).getCollisionShape(world, nextPos).isEmpty()
-			|| !world.getBlockState(nextPos.up()).getCollisionShape(world, nextPos.up()).isEmpty();
+		// V5.24 P1: 门/栅栏门拦路 — 先开门,本 tick 停下,下一 tick 继续走。
+		//   旧实现把门当成普通方块直接 isBlocked → jumpOver 失败 → 卡墙。
+		//   仅处理木门和栅栏门;铁门需要红石,跳过让其走 isBlocked 撞门路径。
+		BlockState nextBlock = world.getBlockState(nextPos);
+		if (isOpenableClosedGate(nextBlock)) {
+			tryOpenGate(p, nextPos);
+			stopMovement(p);
+			return false;
+		}
+		// 头顶位置也检查一次(双层木门的上半截)
+		BlockState upBlock = world.getBlockState(nextPos.up());
+		if (isOpenableClosedGate(upBlock)) {
+			tryOpenGate(p, nextPos.up());
+			stopMovement(p);
+			return false;
+		}
+
+		boolean isBlocked = !nextBlock.getCollisionShape(world, nextPos).isEmpty()
+			|| !upBlock.getCollisionShape(world, nextPos.up()).isEmpty();
 
 		if (isBlocked) {
-			boolean canJump = world.getBlockState(nextPos.up(1)).getCollisionShape(world, nextPos.up(1)).isEmpty()
+			boolean canJump = upBlock.getCollisionShape(world, nextPos.up()).isEmpty()
 				&& world.getBlockState(nextPos.up(2)).getCollisionShape(world, nextPos.up(2)).isEmpty()
 				&& world.getBlockState(p.getBlockPos().up(2)).getCollisionShape(world, p.getBlockPos().up(2)).isEmpty();
 			if (canJump) {
@@ -267,5 +299,40 @@ public class MovementController {
 		}
 
 		return false;
+	}
+
+	/**
+	 * V5.24 P1: 是否为可手动开启的关闭中门/栅栏门。
+	 * 铁门需红石,vanilla interactBlock 不会开 → 跳过(交给 isBlocked 撞门路径,虽然撞不开但
+	 * 至少 A* 不会被 path.clear 反复重置)。
+	 */
+	private static boolean isOpenableClosedGate(BlockState state) {
+		if (state.isOf(Blocks.IRON_DOOR) || state.isOf(Blocks.IRON_TRAPDOOR)) return false;
+		if (state.getBlock() instanceof DoorBlock) {
+			return !state.get(DoorBlock.OPEN);
+		}
+		if (state.getBlock() instanceof FenceGateBlock) {
+			return !state.get(FenceGateBlock.OPEN);
+		}
+		// V5.25 P4-2: wood trapdoor - same interactBlock path as doors. IRON_TRAPDOOR already
+		//   filtered at top early-return (needs redstone, vanilla onUse won't toggle).
+		if (state.getBlock() instanceof net.minecraft.block.TrapdoorBlock) {
+			return !state.get(net.minecraft.block.TrapdoorBlock.OPEN);
+		}
+		return false;
+	}
+
+	/**
+	 * V5.24 P1: 发 interactBlock 包开门/栅栏门,走真实 onPlayerInteractBlock 路径。
+	 * 同步执行:vanilla DoorBlock.onUse / FenceGateBlock.onUse 立刻把方块状态翻为 OPEN=true,
+	 * 下一 tick 的 isBlocked 检查就会通过。
+	 */
+	private static void tryOpenGate(ServerPlayerEntity p, BlockPos gatePos) {
+		Vec3d center = Vec3d.ofCenter(gatePos);
+		// 方向用玩家面朝的相反方向作为命中面(贴合"从外面右键开门"的真人画像)
+		Direction hitFace = p.getHorizontalFacing().getOpposite();
+		BlockHitResult hit = new BlockHitResult(center, hitFace, gatePos, false);
+		PacketHelper.interactBlock(p, Hand.MAIN_HAND, hit);
+		PacketHelper.swingHand(p, Hand.MAIN_HAND);
 	}
 }

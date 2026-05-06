@@ -4,9 +4,11 @@ import com.maohi.fakeplayer.Personality;
 import com.maohi.fakeplayer.VirtualPlayerManager;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.entity.mob.CreeperEntity;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.util.Hand;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.math.MathHelper;
 
@@ -117,6 +119,12 @@ public class CombatReflex {
 	 * V5.22 P4 修复:
 	 *   - forwardSpeed 1.0 → 走 actionMultiplier(原值反作弊会判 SpeedHack)
 	 *   - 增加 fleeUntilTick 上限,防止苦力怕走开后假人继续直线狂奔到天涯海角
+	 *
+	 * V5.24 危险加固(P0):
+	 *   - 旧实现完全不查危险,苦力怕在悬崖/岩浆边时假人会直线倒退跳坑/跳浆
+	 *   - 新实现:先 isDangerAhead 探查正向逃跑点,危险则改尝试 ±90° 侧滑;三向皆险
+	 *     就站定吃苦力怕的爆炸伤(7-22 半心,有甲撑得住),胜过自杀坠崖/烫熟
+	 *   - 站定时仍朝远离方向看,贴合"绝境瞪眼"的真人画面
 	 */
 	private static boolean fleeFrom(ServerPlayerEntity player, Entity threat) {
 		Personality pers = Personality.get(player);
@@ -141,6 +149,43 @@ public class CombatReflex {
 		double rotatedX = fleeX * cos - fleeZ * sin;
 		double rotatedZ = fleeX * sin + fleeZ * cos;
 
+		// V5.24 P0: 危险检测——逃跑前先看正向 1.5 格是不是悬崖/岩浆/火;
+		//   危险则尝试 ±90° 侧滑;三向皆险时站定
+		ServerWorld world = player.getEntityWorld();
+		double moveX = rotatedX, moveZ = rotatedZ;
+		boolean cornered = false;
+
+		if (isFleePathDangerous(world, player, moveX, moveZ)) {
+			// 试右侧 90°(顺时针):(x,z) → (z, -x)
+			double rightX = rotatedZ;
+			double rightZ = -rotatedX;
+			if (!isFleePathDangerous(world, player, rightX, rightZ)) {
+				moveX = rightX;
+				moveZ = rightZ;
+			} else {
+				// 试左侧 90°(逆时针):(x,z) → (-z, x)
+				double leftX = -rotatedZ;
+				double leftZ = rotatedX;
+				if (!isFleePathDangerous(world, player, leftX, leftZ)) {
+					moveX = leftX;
+					moveZ = leftZ;
+				} else {
+					cornered = true;
+				}
+			}
+		}
+
+		if (cornered) {
+			// 三向皆险:站定吃爆炸,胜过自杀坠落/烫死
+			player.setSprinting(false);
+			player.forwardSpeed = 0.0f;
+			player.sidewaysSpeed = 0.0f;
+			// 仍朝远离威胁方向瞪眼
+			float fleeYawCornered = (float) (Math.toDegrees(Math.atan2(-rotatedX, rotatedZ)));
+			smoothTurnYaw(player, fleeYawCornered);
+			return true;
+		}
+
 		// V5.22 P4: 速度受 actionMultiplier 与战斗状态影响,不再硬编码 1.0
 		float speedMod = pers != null ? pers.actionMultiplier : 1.0f;
 		player.setSprinting(true);
@@ -148,8 +193,8 @@ public class CombatReflex {
 		player.sidewaysSpeed = 0.0f;
 		player.travel(new Vec3d(player.sidewaysSpeed, 0, player.forwardSpeed));
 
-		// 平滑朝逃跑方向
-		float fleeYaw = (float) (Math.toDegrees(Math.atan2(-rotatedX, rotatedZ)));
+		// 平滑朝逃跑方向(用最终选定的 moveX/moveZ,不再仅基于威胁方向)
+		float fleeYaw = (float) (Math.toDegrees(Math.atan2(-moveX, moveZ)));
 		smoothTurnYaw(player, fleeYaw);
 
 		// 前方有障碍跳跃逃跑
@@ -168,6 +213,22 @@ public class CombatReflex {
 		}
 
 		return true;
+	}
+
+	/**
+	 * V5.24 P0: 探查给定方向 1.5 格远的逃跑落脚点是否危险。
+	 * 直接调 PathfindingNavigation.isDangerAhead — 内部已涵盖:
+	 *   - fall ≥ 3 格(脚下 + 再下 2 格全 air)
+	 *   - 岩浆流体
+	 *   - 火、岩浆块(脚底烫脚)
+	 */
+	private static boolean isFleePathDangerous(ServerWorld world, ServerPlayerEntity player,
+	                                           double dirX, double dirZ) {
+		BlockPos ahead = BlockPos.ofFloored(
+			player.getX() + dirX * 1.5,
+			player.getY(),
+			player.getZ() + dirZ * 1.5);
+		return PathfindingNavigation.isDangerAhead(world, ahead);
 	}
 
 	/**

@@ -90,6 +90,9 @@ public final class PhaseNether implements Phase {
         ServerWorld world = player.getEntityWorld();
         boolean isNether = world.getRegistryKey() == World.NETHER;
 
+        // V5.25 P3-3: NETHER -> ENDGAME bridge - reach 12 ender eyes -> advancePhase + back to overworld
+        if (tryBridgeToEndgame(player, personality, world, isNether)) return;
+
         // ============================================================
         // 主世界:推进进入下界
         // ============================================================
@@ -407,6 +410,17 @@ public final class PhaseNether implements Phase {
         }
         if (flintSlot == -1) return;
 
+        // V5.25 P4-3: inner cavity entity precheck - interactBlock ignite hits server reach + clear-path
+        //   validation; any LivingEntity inside the frame silently rejects the packet, leaving a built
+        //   but unlit obsidian frame. 2x3x1 inner cavity (x=1..2, y=1..3, z=0); abort if occupied.
+        net.minecraft.util.math.Box innerCavity = new net.minecraft.util.math.Box(
+            base.getX() + 1, base.getY() + 1, base.getZ(),
+            base.getX() + 3, base.getY() + 4, base.getZ() + 1);
+        if (!world.getOtherEntities(player, innerCavity,
+                e -> e instanceof net.minecraft.entity.LivingEntity && e.isAlive()).isEmpty()) {
+            return;
+        }
+
         // V5.23: 标准下界传送门 4 宽 × 5 高,黑曜石只在四边框 = 10 块
         // 框架坐标(相对 base 左下角):
         //   底边: (1,0) (2,0)                  → 2 块
@@ -518,13 +532,65 @@ public final class PhaseNether implements Phase {
     }
 
     /** V5.23: 主世界探索目标 — 锁定 getSafeTopY 可达地面 */
+    /** V5.24: chunk 未加载时回退到 player.getBlockY() 而非 world.getBottomY(),不再把假人引向虚空 */
     private static BlockPos overworldSurfacePoint(ServerWorld world, ServerPlayerEntity player, int radius) {
         int dx = ThreadLocalRandom.current().nextInt(radius * 2 + 1) - radius;
         int dz = ThreadLocalRandom.current().nextInt(radius * 2 + 1) - radius;
         int x = player.getBlockX() + dx;
         int z = player.getBlockZ() + dz;
-        int y = PathfindingNavigation.getSafeTopY(world, x, z);
+        int y = PathfindingNavigation.getSafeTopY(world, x, z, player.getBlockY());
         return new BlockPos(x, y, z);
+    }
+
+    /**
+     * V5.25 P3-3: NETHER -> ENDGAME bridge.
+     * Triggers when ender eye count reaches the vanilla End Portal activation threshold (12).
+     *   1. advancePhase to ENDGAME (single-direction ratchet, next detectPhase routes to PhaseEnderDragon)
+     *   2. If already in overworld - set a short IDLE so PhaseEnderDragon takes over next tick
+     *   3. Still in nether - reuse lookupPortal to walk back through the closest nether portal
+     */
+    private static boolean tryBridgeToEndgame(ServerPlayerEntity player, Personality personality,
+                                              ServerWorld world, boolean isNether) {
+        if (countEnderEyes(player) < 12) return false;
+
+        com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
+        if (mgr == null) return false;
+        mgr.advancePhase(player, com.maohi.fakeplayer.GrowthPhase.ENDGAME);
+
+        if (!isNether) {
+            // already in overworld - park briefly, PhaseEnderDragon takes over
+            set(personality, TaskType.IDLE, player.getBlockPos(), 5_000L);
+            return true;
+        }
+
+        // still in nether - walk to nearest portal back to overworld
+        BlockPos portal = lookupPortal(player, world);
+        if (portal != null) {
+            double distSq = player.squaredDistanceTo(
+                portal.getX() + 0.5, portal.getY(), portal.getZ() + 0.5);
+            if (distSq > 4.0) {
+                set(personality, TaskType.EXPLORING, portal, TimingConstants.TASK_TIMEOUT_EXPLORE);
+            } else {
+                interactPortal(player, portal);
+            }
+            return true;
+        }
+
+        // no portal cached/found - fall back to wandering, expecting to drift near original crossing
+        set(personality, TaskType.EXPLORING,
+            netherSurfacePoint(world, player, 80),
+            TimingConstants.TASK_TIMEOUT_EXPLORE);
+        return true;
+    }
+
+    private static int countEnderEyes(ServerPlayerEntity player) {
+        net.minecraft.entity.player.PlayerInventory inv = player.getInventory();
+        int count = 0;
+        for (int i = 0; i < inv.size(); i++) {
+            ItemStack s = inv.getStack(i);
+            if (s.isOf(Items.ENDER_EYE)) count += s.getCount();
+        }
+        return count;
     }
 
     private static void set(Personality p, TaskType type, BlockPos target, long timeout) {

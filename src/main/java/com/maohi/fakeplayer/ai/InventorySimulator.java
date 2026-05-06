@@ -45,8 +45,15 @@ public class InventorySimulator {
 	 * 
 	 * M5 NOTE: 此方法使用 setStack() 直接注入物品，不走 vanilla 拾取机制。
 	 * 这是已知权衡——新号首次进服无法走 ItemEntity 拾取（没有来源实体）。
-	 * 长期方案：模拟地面掉落 → onPlayerCollision 拾取（待 Phase C 评估）。
+	 * V5.26 P5-A: call site removed from PlayerSpawner. The setStack x N at login+5s
+	 *   produced "C2S-less unilateral inventory update flood" in server PCAP, easy ML
+	 *   anticheat catch. Bots now spawn with empty inventory = identical to real new
+	 *   accounts. This method is kept because the SlotEntry distribution logic (item
+	 *   probabilities, tool durability) is reusable for the future NBT injection path -
+	 *   that path will serialize this output to world/playerdata/<uuid>.dat so vanilla
+	 *   readNbt loads it during login, PCAP-equivalent to a returning real player.
 	 */
+	@Deprecated
 	public static void injectRealisticLoot(ServerPlayerEntity player, Personality personality) {
 		if (personality != null && personality.initialLootInjected) return;
 		// 如果背包里已经有东西了（可能是读取了以前的存档），就不全盘覆盖，只在后面追加
@@ -98,7 +105,7 @@ public class InventorySimulator {
 		// 1d. 老矿工的阶梯式财富 (彩票机制)
 		// 30% 概率身上有点铁锭
 		if (rnd.nextInt(100) < 30) {
-			entries.add(new SlotEntry(Items.LEAD, 2 + rnd.nextInt(15), false));
+			entries.add(new SlotEntry(Items.IRON_INGOT, 2 + rnd.nextInt(15), false));
 		}
 		// 5% 极低概率身上揣着钻石
 		if (rnd.nextInt(100) < 5) {

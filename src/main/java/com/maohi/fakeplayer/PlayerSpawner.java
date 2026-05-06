@@ -134,23 +134,14 @@ public class PlayerSpawner {
 		}
 	}
 
-	// 拟真化补丁：不要在进服瞬间注入物资，防止成就刷屏（Stone Age!）
-	// 延迟 5 秒再偷偷注入，模拟玩家从箱子里拿东西或“整理背包”的过程
-	server.execute(() -> {
-		new Thread(() -> {
-			try { Thread.sleep(5000); } catch (InterruptedException ignored) {}
-			server.execute(() -> {
-				if (player.isAlive()) {
-					// V5.5 加固：获取当前个性能记录
-					Personality personality = manager.getPersonality(player.getUuid());
-					// 只有【新生成的假人】且【从未注入过物资】时才允许下发
-					if (saved == null && personality != null && !personality.initialLootInjected) {
-						com.maohi.fakeplayer.ai.InventorySimulator.injectRealisticLoot(player, personality);
-					}
-				}
-			});
-		}, "Loot-Delay").start();
-	});
+	// V5.26 P5-A: removed InventorySimulator.injectRealisticLoot birth grant - protocol layer's biggest single hole.
+	//   Original 5s delayed setStack x N injected items with no C2S trigger, server PCAP showed
+	//   "inventory update flood 5s after login complete" while real players (load via readNbt at
+	//   login) have a totally different distribution - ML anticheats catch this in seconds. Now
+	//   new bots spawn with empty inventory, identical to real new accounts; early advancements
+	//   (plant_seed/sleep_in_bed/hot_stuff) unlock via real mining/crafting, ~10-30 min later but
+	//   fully natural. To keep the "old miner persona", switch to NBT injection (write fake
+	//   player.dat so vanilla readNbt loads it - same code path as a returning player).
         
         // 发送品牌包（伪装为 Fabric 客户端）
         try {
