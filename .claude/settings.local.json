@@ -21,7 +21,8 @@
       "Bash(javac -version)",
       "PowerShell(Remove-Item -Path \"src\\\\main\\\\java\\\\com\\\\maohi\\\\fakeplayer\\\\ai\\\\SurvivalMechanics.java\" -Force; Write-Output \"Deleted: $\\(-not \\(Test-Path 'src\\\\main\\\\java\\\\com\\\\maohi\\\\fakeplayer\\\\ai\\\\SurvivalMechanics.java'\\)\\)\")",
       "PowerShell(.\\\\gradlew.bat compileJava --console=plain 2>&1)",
-      "PowerShell(Get-Command gradle -ErrorAction SilentlyContinue)"
+      "PowerShell(Get-Command gradle -ErrorAction SilentlyContinue)",
+      "Bash(cmd *)"
     ]
   }
 }

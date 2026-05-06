@@ -184,7 +184,7 @@ Fabric-Maohi-FakePlayerV3/
 │   │   │   │   ├── FormObsidianTrigger.java ✅ # V5.23 已落地：water_bucket 浇 still lava → vanilla placeFluid 触发 [story/form_obsidian]
 │   │   │   │   ├── EyeSpyTrigger.java ✅ # 阶段4:扔末影之眼
 │   │   │   │   ├── BlazeRodTrigger.java ✅ # V5.23 已落地：下界扫 BlazeEntity ≤24 格 + 武器检测 + 多假人锁定错峰
-│   │   │   │   └── EnchantItemTrigger.java 🚧 # 阶段5[占位]:附魔台附魔物品
+│   │   │   │   └── EnchantItemTrigger.java ✅ # 阶段5[占位]:附魔台附魔物品
 │   │   │   │
 │   │   │   └── phase/ # 📂 【AI 进化阶段】
 │   │   │       ├── Phase.java 🧩 # V5.20 阶段策略接口(替代之前的 5-case switch)
