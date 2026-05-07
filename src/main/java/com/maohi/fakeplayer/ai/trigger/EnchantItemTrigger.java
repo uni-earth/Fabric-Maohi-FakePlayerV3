@@ -3,13 +3,13 @@ package com.maohi.fakeplayer.ai.trigger;
 import com.maohi.fakeplayer.GrowthPhase;
 import com.maohi.fakeplayer.Personality;
 import com.maohi.fakeplayer.TaskType;
+import com.maohi.fakeplayer.network.InventoryActionHelper;
 import com.maohi.fakeplayer.network.PacketHelper;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.screen.EnchantmentScreenHandler;
-import net.minecraft.screen.slot.Slot;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.Hand;
@@ -117,53 +117,54 @@ public final class EnchantItemTrigger implements AchievementTrigger {
 		//    若被反作弊插件 cancel 或 table 被破坏,currentScreenHandler 仍是默认的 playerScreenHandler
 		if (!(player.currentScreenHandler instanceof EnchantmentScreenHandler handler)) {
 			// 异常状态:开了别的界面 → 关掉清理,避免影响下游 trigger
+			// V5.28 P1-A.5 hazard fix: 关界面走真包,与 line 162 一致
 			if (player.currentScreenHandler != player.playerScreenHandler) {
-				player.closeHandledScreen();
+				InventoryActionHelper.closeScreen(player);
 			}
 			return;
 		}
 
-		// 6. 拆 1 件物品 + 1 lapis 放进 handler 输入槽
-		//    book 64 堆叠时必须只放 1,否则 onButtonClick 会把整堆 64 替换成 1 个 enchanted_book(直接吞 63 本)
-		ItemStack itemFromInv = inv.getStack(itemSlot);
-		ItemStack singleItem = itemFromInv.copyWithCount(1);
-		if (itemFromInv.getCount() > 1) {
-			itemFromInv.decrement(1);
-		} else {
-			inv.setStack(itemSlot, ItemStack.EMPTY);
+		// 6. 真协议化:把 1 件物品 + 1 lapis 搬到 handler 输入槽
+		//    旧实现 inv.setStack + Slot.setStack 直挪绕过 ClickSlot 协议,反作弊检测 desync 易暴露。
+		//    新实现走真实"拿起 → 右键放 1 → 余数放回"3-packet 序列,与真人客户端 PCAP 一致。
+		//    book 64 堆叠时也只放 1,避免 onButtonClick 把整堆 64 替换成 1 个 enchanted_book(吞 63 本)。
+		int itemScreenSlot = InventoryActionHelper.playerInvSlotToScreenSlot(handler, itemSlot);
+		int lapisScreenSlot = InventoryActionHelper.playerInvSlotToScreenSlot(handler, lapisSlot);
+		if (itemScreenSlot < 0 || lapisScreenSlot < 0) {
+			InventoryActionHelper.closeScreen(player);
+			return;
 		}
+		moveOne(player, itemScreenSlot, 0);   // item → enchant input
+		moveOne(player, lapisScreenSlot, 1);  // lapis → enchant lapis slot
 
-		ItemStack lapisFromInv = inv.getStack(lapisSlot);
-		ItemStack singleLapis = lapisFromInv.copyWithCount(1);
-		if (lapisFromInv.getCount() > 1) {
-			lapisFromInv.decrement(1);
-		} else {
-			inv.setStack(lapisSlot, ItemStack.EMPTY);
-		}
+		// 7. 点 button id=0(最低档:1 lapis,1 级 XP) — 真实 ButtonClickC2SPacket
+		//    server-side onButtonClick 同步执行:
+		//    - 计算附魔(基于 enchantmentPower[] / enchantmentSeed)
+		//    - handler[0] 替换为 enchanted_item(book → enchanted_book)
+		//    - handler[1] 减 1 lapis
+		//    - player.experienceLevel -= (button id + 1)
+		//    - Criteria.ENCHANTED_ITEM trigger → story/enchant_item 解锁
+		//    失败时(0 书架 power[0]==0)handler 槽不变,仅光标/界面状态保持
+		InventoryActionHelper.clickButton(player, 0);
 
-		// Slot.setStack → markDirty → SimpleInventory(匿名)markDirty → onContentChanged → enchantmentPower 同步算好
-		// TODO V5.28 P1-A.5: Implement real ClickSlotC2SPacket sequence for enchanting
-		Slot itemSlotInHandler = handler.getSlot(0);
-		Slot lapisSlotInHandler = handler.getSlot(1);
-		itemSlotInHandler.setStack(singleItem);
-		lapisSlotInHandler.setStack(singleLapis);
+		// 8. QUICK_MOVE 把 handler 槽 0/1 残留(成功:enchanted_item;失败:原物品+lapis)还回背包
+		//    vanilla quickMove 自动找空 inv 槽
+		InventoryActionHelper.quickMove(player, 0);
+		InventoryActionHelper.quickMove(player, 1);
 
-		// 7. 点 button id=0(最低档:1 lapis,1 级 XP) → context.run 内同步 fire criterion
-		boolean ok = handler.onButtonClick(player, 0);
+		// 9. 关界面 — 与开界面的 interactBlock 包配对的 CloseHandledScreenC2SPacket
+		InventoryActionHelper.closeScreen(player);
 
-		// 8. 取回 slot 残留(成功 → enchanted item;失败 → 原物品),关界面
-		ItemStack remainItem = itemSlotInHandler.getStack();
-		ItemStack remainLapis = lapisSlotInHandler.getStack();
-		itemSlotInHandler.setStack(ItemStack.EMPTY);
-		lapisSlotInHandler.setStack(ItemStack.EMPTY);
-		player.closeHandledScreen();
-
-		if (!remainItem.isEmpty()) inv.offerOrDrop(remainItem);
-		if (!remainLapis.isEmpty()) inv.offerOrDrop(remainLapis);
-
-		// ok=false 多发于 0 书架 enchantmentPower[0]==0 — 下次 roll 自然重试,不写日志保持安静失败
+		// 静音失败:0 书架场景 onButtonClick 不会改变 handler 槽,QUICK_MOVE 把原物品搬回即可
 		// (TriggerRegistry 已用 try/catch 兜底,这里也不抛异常)
-		if (!ok) return;
+	}
+
+	/**
+	 * V5.28.2 A.5: 把背包某槽 1 件物品搬到 handler 目标槽 — 委托 InventoryActionHelper。
+	 * 局部 helper 仅为可读性,A.1/A.4 也走同一公共实现。
+	 */
+	private static void moveOne(ServerPlayerEntity player, int srcScreenSlot, int dstHandlerSlot) {
+		InventoryActionHelper.moveOneToHandlerSlot(player, srcScreenSlot, dstHandlerSlot);
 	}
 
 	/**

@@ -1,6 +1,7 @@
 package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.GrowthPhase;
+import com.maohi.fakeplayer.network.MovementInputHelper;
 import com.maohi.fakeplayer.network.PacketHelper;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -62,36 +63,46 @@ public class MovementController {
 
 	/**
 	 * 停止所有移动输入
-	 * V3.2 1.21.11 适配：通过 Access Widener 直接设置 LivingEntity 的 forwardSpeed/sidewaysSpeed 字段
+	 * V5.28 P1-B.1: 改走 PlayerInputC2SPacket 协议路径,vanilla setPlayerInput 同步落到
+	 *   forwardSpeed/sidewaysSpeed/jumping 字段。sprint 走 ClientCommand。
 	 */
 	private static void stopMovement(ServerPlayerEntity p) {
-		p.forwardSpeed = 0.0f;
-		p.sidewaysSpeed = 0.0f;
-		p.setSprinting(false);
+		MovementInputHelper.stop(p);
 	}
 
 	/**
-	 * 设置前进输入
-	 * @param forward 前进速度 (-1.0 ~ 1.0)
-	 * @param sideways 横向速度 (-1.0 ~ 1.0)
+	 * 设置前进输入 + 同 tick 内的 jump/sprint 意图。
+	 * V5.28 P1-B.1: 不再直写 forwardSpeed/sidewaysSpeed,改 PlayerInputC2SPacket。
+	 *   jump 必须与 forward/sideways 在同一发包里——若分两次 send(jump=true 后 jump=false),
+	 *   后一发会在 entity tick 前覆盖 jumping 字段,跳跃失效。
+	 *
+	 * @param forward 前进速度 (-1.0 ~ 1.0),阈值 0.1 转 W/S 按键标志位
+	 * @param sideways 横向速度 (-1.0 ~ 1.0),阈值 0.1 转 A/D 按键标志位
+	 * @param jump 本 tick 是否按空格
+	 * @param sprint 本 tick 是否处于冲刺状态
 	 */
-	private static void setMovement(ServerPlayerEntity p, float forward, float sideways) {
+	private static void setMovement(ServerPlayerEntity p, float forward, float sideways,
+			boolean jump, boolean sprint) {
 		com.maohi.fakeplayer.Personality pers =
 			com.maohi.fakeplayer.Personality.get(p);
-		
+
 		if (pers != null) {
 			// V5.2 Keyboard Fingerprint: WASD 松键间隙模拟
 			if (pers.keyReleaseMicroGapTicks > 0) {
 				pers.keyReleaseMicroGapTicks--;
-				p.forwardSpeed = 0.0f;
-				p.sidewaysSpeed = 0.0f;
+				// 间隙期所有方向键松开;jump 仍尊重(松手不一定不跳),sprint 跟随真实手感清掉
+				MovementInputHelper.send(p, false, false, false, false,
+					jump, MovementInputHelper.current(p).sneak(), false);
 				return;
 			}
-			
+
 			// 方向大切换时产生随机停顿
 			// V5.22: 误触发概率从 1/10 降到 1/40——原值在每次启停时几乎必触发,
 			//        导致 mining"接近目标→减速→停"反复抽搐
-			if (Math.abs(forward - p.forwardSpeed) > 0.5f || Math.abs(sideways - p.sidewaysSpeed) > 0.5f) {
+			net.minecraft.util.PlayerInput cur = MovementInputHelper.current(p);
+			float curForward = cur.forward() ? 1f : (cur.backward() ? -1f : 0f);
+			float curSide = cur.left() ? 1f : (cur.right() ? -1f : 0f);
+			if (Math.abs(forward - curForward) > 0.5f || Math.abs(sideways - curSide) > 0.5f) {
 				if (ThreadLocalRandom.current().nextInt(40) == 0) {
 					pers.keyReleaseMicroGapTicks = 1 + ThreadLocalRandom.current().nextInt(2); // 50-100ms
 					return;
@@ -99,8 +110,7 @@ public class MovementController {
 			}
 		}
 
-		p.forwardSpeed = forward;
-		p.sidewaysSpeed = sideways;
+		MovementInputHelper.sendMovement(p, forward, sideways, jump, sprint);
 	}
 
 	/**
@@ -112,11 +122,17 @@ public class MovementController {
 			double noisePhaseYaw, double noisePhasePitch) {
 		if (target == null) { stopMovement(p); return true; }
 
-		// V5.25 P4-1: bot fell into water - jump() each tick triggers vanilla swim-up impulse
-		// (LivingEntity routes jump to water-rise when isInsideWaterOrBubbleColumn), keeping
+		// V5.28 P1-B.1: 累积本 tick 的 jump/sprint 意图,最终一次 send。
+		//   早 send(jump=true) 后 send(jump=false) 会在 entity tick 前覆盖 jumping 字段,
+		//   导致跳跃丢失;必须把所有意图集中到末尾的 setMovement 里。
+		boolean wantJump = false;
+		boolean wantSprint = false;
+
+		// V5.25 P4-1: bot fell into water - jump=true triggers vanilla swim-up impulse
+		// (LivingEntity routes jumping to water-rise when isInsideWaterOrBubbleColumn), keeping
 		// the path target intact while preventing drowning at the bottom.
 		if (p.isTouchingWater()) {
-			p.jump();
+			wantJump = true;
 		}
 
 		com.maohi.fakeplayer.Personality pers =
@@ -124,9 +140,9 @@ public class MovementController {
 
 		// V5.0 A: 物理跳跃检测 (识别 1 格坑)
 		BlockPos ahead = p.getBlockPos().offset(p.getHorizontalFacing());
-		if (p.isOnGround() && p.getEntityWorld().getBlockState(ahead).isAir() 
+		if (p.isOnGround() && p.getEntityWorld().getBlockState(ahead).isAir()
 			&& !p.getEntityWorld().getBlockState(ahead.offset(p.getHorizontalFacing())).isAir()) {
-			p.jump();
+			wantJump = true;
 		}
 
 		// 平滑转向逻辑
@@ -230,7 +246,7 @@ public class MovementController {
 
 		// V5.2 Keyboard Fingerprint: 双击方向键冲刺误触发模拟
 		if (p.isOnGround() && !p.isSprinting() && ThreadLocalRandom.current().nextInt(1000) == 0) {
-			p.setSprinting(true); // 突然手滑冲刺一下
+			wantSprint = true; // 突然手滑冲刺一下 — 实际 sprint 切换在末尾 setMovement 里发 ClientCommand
 		}
 
 		// 前方碰撞检测
@@ -270,9 +286,9 @@ public class MovementController {
 				&& world.getBlockState(p.getBlockPos().up(2)).getCollisionShape(world, p.getBlockPos().up(2)).isEmpty();
 			if (canJump) {
 				if (p.isOnGround()) {
-					p.setSprinting(ndist > 4.0);
-					setMovement(p, 1.0f, 0.0f);
-					p.jump();
+					// V5.28 P1-B.1: jump + sprint + forward 全部一发 PlayerInputC2SPacket 送出。
+					//   分两次发(setSprinting → setMovement → jump)会让 jumping 字段被中间 send 覆盖。
+					setMovement(p, 1.0f, 0.0f, /*jump*/ true, /*sprint*/ ndist > 4.0 || wantSprint);
 					p.addVelocity(ndx / ndist * 0.1, 0, ndz / ndist * 0.1);
 				}
 			} else {
@@ -282,20 +298,26 @@ public class MovementController {
 				return false; // 不放弃任务，等下次 tick 重算路径
 			}
 		} else {
-			p.setSprinting(ndist > 4.0);
+			boolean sprintHere = ndist > 4.0 || wantSprint;
 			float lateralDrift = perlinLike(noisePhaseYaw * 1.2, noiseTime, 0.5f);
 			if (ThreadLocalRandom.current().nextInt(150) == 0)
 				lateralDrift += ThreadLocalRandom.current().nextFloat() * 0.8f - 0.4f;
-			
+
 			// V4.4 情绪修正：死后 5 分钟内速度降低 30% (跑尸沮丧模拟)
 			float speedFactor = 1.0f;
 			long serverTicks = p.getEntityWorld().getServer().getTicks();
 			if (pers != null && serverTicks - pers.lastDeathTick < 6000) {
 				speedFactor = 0.7f;
 			}
-			
-			setMovement(p, (0.8f + ThreadLocalRandom.current().nextFloat() * 0.2f) * speedFactor, lateralDrift * speedFactor);
-			p.travel(new Vec3d(p.sidewaysSpeed, 0, p.forwardSpeed));
+
+			setMovement(p,
+				(0.8f + ThreadLocalRandom.current().nextFloat() * 0.2f) * speedFactor,
+				lateralDrift * speedFactor,
+				wantJump, sprintHere);
+			// V5.28.4 P1-C.1: 删除 p.travel(...) 强制额外物理 tick——
+			//   vanilla ServerPlayerEntity.tick() 每 tick 自己按 forwardSpeed/sidewaysSpeed 算 travel,
+			//   手动推一帧会让假人位移翻倍,PCAP 易识别。
+			// V5.28 P1-B.1: forward/sideways 改 PlayerInputC2SPacket,vanilla setPlayerInput 落字段。
 		}
 
 		return false;

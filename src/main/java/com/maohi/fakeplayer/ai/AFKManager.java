@@ -5,6 +5,7 @@ import com.maohi.fakeplayer.VirtualPlayerManager;
 import com.maohi.fakeplayer.Personality;
 import com.maohi.fakeplayer.TaskType;
 import com.maohi.fakeplayer.TimingConstants;
+import com.maohi.fakeplayer.network.MovementInputHelper;
 import com.maohi.fakeplayer.social.VocabularyBank;
 import net.minecraft.server.network.ServerPlayerEntity;
 import java.util.concurrent.ThreadLocalRandom;
@@ -55,8 +56,9 @@ public final class AFKManager {
 				personality.isAFK = true;
 				personality.afkRemainingTicks = 200 + ThreadLocalRandom.current().nextInt(1000); // 10-60 秒
 				personality.currentTask = TaskType.AFK;
-				p.setSneaking(false);
-				p.setSprinting(false);
+				// V5.28 P1-B.4: setSneaking/setSprinting 改 PlayerInputC2SPacket / ClientCommand
+				MovementInputHelper.setSneaking(p, false);
+				MovementInputHelper.setSprinting(p, false);
 				// AFK 前可能发一条离开消息
 				String afkMsg = VocabularyBank.getAFKMessage();
 				if (ThreadLocalRandom.current().nextInt(3) == 0) {

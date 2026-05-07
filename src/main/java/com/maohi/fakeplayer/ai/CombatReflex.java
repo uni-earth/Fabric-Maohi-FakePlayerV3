@@ -2,6 +2,7 @@ package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.Personality;
 import com.maohi.fakeplayer.VirtualPlayerManager;
+import com.maohi.fakeplayer.network.MovementInputHelper;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -9,7 +10,6 @@ import net.minecraft.entity.mob.CreeperEntity;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.math.MathHelper;
 
 import java.util.List;
@@ -56,7 +56,8 @@ public class CombatReflex {
 					}
 				}
 			}
-			player.setSneaking(underRangedAttack);
+			// V5.28 P1-B.2: setSneaking 改 PlayerInputC2SPacket — sneak flag 走 vanilla setPlayerInput
+			MovementInputHelper.setSneaking(player, underRangedAttack);
 		}
 
 		// 3. 优先级1:苦力怕逃跑
@@ -87,15 +88,18 @@ public class CombatReflex {
 					float speedMod = pers != null ? pers.actionMultiplier : 1.0f;
 					float strafeDirection = (player.getId() % 2 == 0) ? 1.0f : -1.0f;
 					if (ThreadLocalRandom.current().nextInt(20) == 0) strafeDirection *= -1;
-					player.sidewaysSpeed = 0.5f * strafeDirection * speedMod;
-					player.forwardSpeed = 0.3f * speedMod;
+					float forwardSpeed = 0.3f * speedMod;
+					float sidewaysSpeed = 0.5f * strafeDirection * speedMod;
 
+					// V5.28 P1-B.2: jump 必须与 forward/sideways 同 tick 拼包送出,不能后发——
+					//   先决定本 tick 是否跳劈,再 sendMovement 一次。
+					boolean wantJump = false;
 					float cooldown = player.getAttackCooldownProgress(0.5f);
 					if (cooldown >= ATTACK_COOLDOWN_THRESHOLD) {
 						// V5.22 P2: 跳劈频率 1/3 → 1/15,避免被反作弊判 KillAura+Jump
 						if (player.experienceLevel > 10 && player.isOnGround()
 							&& ThreadLocalRandom.current().nextInt(15) == 0) {
-							player.jump();
+							wantJump = true;
 						}
 
 						com.maohi.fakeplayer.network.PacketHelper.attackEntity(player, hostile);
@@ -104,6 +108,8 @@ public class CombatReflex {
 							pers.lastAttackTick = player.getEntityWorld().getServer().getTicks();
 						}
 					}
+					MovementInputHelper.sendMovement(player, forwardSpeed, sidewaysSpeed,
+						wantJump, /*sprint*/ player.isSprinting());
 				}
 
 				return false;
@@ -177,9 +183,8 @@ public class CombatReflex {
 
 		if (cornered) {
 			// 三向皆险:站定吃爆炸,胜过自杀坠落/烫死
-			player.setSprinting(false);
-			player.forwardSpeed = 0.0f;
-			player.sidewaysSpeed = 0.0f;
+			// V5.28 P1-B.2: setSprinting + 清空 forward/sideways 改 PlayerInputC2SPacket 路径
+			MovementInputHelper.stop(player);
 			// 仍朝远离威胁方向瞪眼
 			float fleeYawCornered = (float) (Math.toDegrees(Math.atan2(-rotatedX, rotatedZ)));
 			smoothTurnYaw(player, fleeYawCornered);
@@ -188,19 +193,20 @@ public class CombatReflex {
 
 		// V5.22 P4: 速度受 actionMultiplier 与战斗状态影响,不再硬编码 1.0
 		float speedMod = pers != null ? pers.actionMultiplier : 1.0f;
-		player.setSprinting(true);
-		player.forwardSpeed = 0.85f * speedMod; // 略低于 vanilla sprint 上限,留余量
-		player.sidewaysSpeed = 0.0f;
-		player.travel(new Vec3d(player.sidewaysSpeed, 0, player.forwardSpeed));
 
 		// 平滑朝逃跑方向(用最终选定的 moveX/moveZ,不再仅基于威胁方向)
 		float fleeYaw = (float) (Math.toDegrees(Math.atan2(-moveX, moveZ)));
 		smoothTurnYaw(player, fleeYaw);
 
-		// 前方有障碍跳跃逃跑
-		if (player.isOnGround() && player.horizontalCollision) {
-			player.jump();
-		}
+		// 前方有障碍跳跃逃跑 — 与 sprint+forward 同包送出(B.2 同步关键点)
+		boolean wantJump = player.isOnGround() && player.horizontalCollision;
+		// V5.28 P1-B.2 + V5.28.4 P1-C.1:
+		//   - forward/sideways/jump/sprint 一次 PlayerInputC2SPacket 全发,vanilla setPlayerInput 落字段
+		//   - 不再用 player.travel(...) 推第二帧物理(双倍位移指纹)
+		MovementInputHelper.sendMovement(player,
+			/*forward*/ 0.85f * speedMod, // 略低于 vanilla sprint 上限,留余量
+			/*sideways*/ 0.0f,
+			wantJump, /*sprint*/ true);
 
 		// 8% 概率惊恐喊话
 		if (ThreadLocalRandom.current().nextInt(120) == 0) {

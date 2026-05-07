@@ -258,9 +258,11 @@ if (player.currentScreenHandler instanceof <ExpectedScreenHandler> sh) {
     int syncId = sh.syncId;
     int revision = sh.getRevision();
     // 3) 构造 ClickSlot 包(签名以 mappings.tiny 当前为准)
+    //    1.21.11 实测签名:(int,int,short,byte,SlotActionType,Int2ObjectMap,ItemStack)
+    //    注意 modifiedStacks 在前、cursor 在后 — 旧版本可能颠倒
     ClickSlotC2SPacket pkt = new ClickSlotC2SPacket(
         syncId, revision, slotIndex, button, actionType,
-        cursorStack, modifiedSlots);
+        modifiedSlots, cursorStack);
     player.networkHandler.onClickSlot(pkt);
 }
 // 4) 关闭
@@ -285,35 +287,73 @@ MovementInputHelper.sendInput(player,
 
 ## 10. 状态跟踪
 
-### Phase A — 背包协议化
+### Phase A — 背包协议化(8/8 已完成 ✓ + F.1 ✓)
 - [x] A.0 写 InventoryActionHelper 工具类(若 ClickSlotC2SPacket 调用样板复杂,先抽 helper)
-- [⚠️] A.1 CraftingBehavior 改协议 (TODO added)
+  - V5.28.1: SWAP 路径补 modifiedStacks 预测 + cursor=EMPTY,消除"永远空 map"指纹
+  - V5.28.2: 加 PICKUP (pickupAll/pickupOne) + QUICK_MOVE + ButtonClick + playerInvSlotToScreenSlot 公共转换 + moveOneToHandlerSlot 序列
+- [x] A.1 CraftingBehavior 改协议 (V5.28.2)
+  - 倒计时归零时走真实链:findCraftingTable → interactBlock → CraftingScreenHandler 校验 → 配方表逐槽 PICKUP 摆原料 → QUICK_MOVE 槽 0 取产物 → CloseScreen
+  - 配方表静态 hardcode 7 个 (stone/iron/diamond pickaxe/axe + stone sword + beacon)
 - [x] A.2 EatingBehavior 改协议
 - [x] A.3 LootTracker 改协议(推荐方案 A: 删自动装备)
-- [⚠️] A.4 SmeltingBehavior 改协议 (TODO added)
-- [⚠️] A.5 EnchantItemTrigger 改协议 (TODO added)
+- [x] A.4 SmeltingBehavior 改协议 (V5.28.2)
+  - 双阶段状态机:阶段 1 (autoSmeltOres) interactBlock → 摆原料/燃料 → close + 设 smeltingTicks=200,
+    阶段 2 (tickSmelting==0) interactBlock 重开 → quickMove 输出槽 → close
+  - Personality 加 smeltingFurnacePos 字段记忆熔炉坐标
+- [x] A.5 EnchantItemTrigger 改协议 (V5.28.2)
+  - 拆物到 handler 槽改成 3-packet "拿起 → 右键放 1 → 余数放回" 序列
+  - 按钮点击改用 ButtonClickC2SPacket(原来直接调 handler.onButtonClick 绕过包)
+  - 残留取回改 QUICK_MOVE
 - [x] A.6 EquipmentBehavior 改协议
 - [x] A.7 TriggerUtil 改协议
 - [x] A.8 VirtualPlayerManager 命令交换改协议
 
-### Phase B — 移动协议化
-- [ ] B.0 调研 PlayerInputC2SPacket + 写 MovementInputHelper
-- [ ] B.1 MovementController 改协议
-- [ ] B.2 CombatReflex 改协议
-- [ ] B.3 PvpSparring / PhaseNether / VirtualPlayerManager 剩余直写
-- [ ] B.4 setSneaking / setSprinting / jump() 改协议
+### Phase B — 移动协议化 (5/5 已完成 ✓)
+- [x] B.0 调研 PlayerInputC2SPacket + 写 MovementInputHelper (V5.28.6)
+  - 1.21.11 形态: `PlayerInputC2SPacket(PlayerInput)` 单字段;`PlayerInput(forward,backward,left,right,jump,sneak,sprint)` 7 个 boolean record
+  - 服务端入口: `ServerPlayNetworkHandler#onPlayerInput(packet)` → `ServerPlayerEntity.setPlayerInput` 同步落 forwardSpeed/sidewaysSpeed/jumping/setSneaking
+  - 注意: vanilla `setPlayerInput` 不会根据 sprint 位翻 isSprinting() — sprint 切换走 `ClientCommandC2SPacket(START_SPRINTING/STOP_SPRINTING)` 独立通道
+  - 新文件 [network/MovementInputHelper.java](src/main/java/com/maohi/fakeplayer/network/MovementInputHelper.java):
+    - `send(p, fwd, back, left, right, jump, sneak, sprint)` — 完整 7 位输入,按需补 sprint client command
+    - `sendMovement(p, forward, sideways, jump, sprint)` — 浮点 → flag(阈值 0.1)
+    - `stop(p)` / `setSneaking(p, sneak)` / `setSprinting(p, sprint)` / `current(p)` 便捷接口
+    - 内部缓存 lastSent 实现幂等(状态相同时不重发,贴合真人客户端只在变化时发包的指纹)
+- [x] B.1 MovementController 改协议 (V5.28.6)
+  - `stopMovement` → `MovementInputHelper.stop`;`setMovement` 签名加 `(jump, sprint)` 参数,内部走 `sendMovement`
+  - doSmartMove 累积 `wantJump`/`wantSprint` 局部变量,集中到末尾的 setMovement 一发 PlayerInputC2SPacket
+  - 关键:水中 swim-up + 1 格坑跳 + 双击冲刺误触 + blocked-canJump 跳越 + 平地 sprint 切换全部一发包搞定
+- [x] B.2 CombatReflex 改协议 (V5.28.6)
+  - 持盾 setSneaking → `MovementInputHelper.setSneaking`
+  - 战斗 strafe + 跳劈 → 同 tick 用 `wantJump` 局部聚合后一发 sendMovement
+  - flee 三向皆险站定 → `stop`;active flee → sendMovement(forward=0.85,sprint=true,jump=horizontalCollision)
+- [x] B.3 PvpSparring / PhaseNether / VirtualPlayerManager 剩余直写 (V5.28.6)
+  - PvpSparring 站定攻击区:wantJump 聚合 + send(false×4, jump, sneak保留, sprint=false)
+  - PhaseNether 传送门候站:`stop`
+  - VirtualPlayerManager 4 处直写 forwardSpeed/sidewaysSpeed 改 `stop`/`send`(到达工作范围 / 决策犹豫 / 任务推进 / 狩猎接战)
+- [x] B.4 setSneaking / setSprinting / jump() 改协议 (V5.28.6)
+  - VirtualPlayerManager 蹲起延时消费:`MovementInputHelper.setSneaking`
+  - ActionSimulator(看东西蹲起 + Shift 回礼)、AFKManager(进 AFK 清 sneak/sprint)、SocialEngine(蹲起问候)全改 helper
+  - 全仓库 `\.forwardSpeed|\.sidewaysSpeed|\.jumping|\.setSneaking\(|\.setSprinting\(|\.jump\(\)` 直接调用清零(只剩 helper 内部 PlayerInput record getter)
 
 ### Phase C — 物理跳过清理
-- [ ] C.1 删 player.travel(Vec3d) 强制额外物理 tick
+- [x] C.1 删 player.travel(Vec3d) 强制额外物理 tick (V5.28.4)
+  - CombatReflex.java:194 + MovementController.java:298 两处删除,vanilla ServerPlayerEntity.tick 自己每 tick 按字段算 travel,不再多推一帧
 
 ### Phase D — 行为反作弊
-- [ ] D.1 删高空硬瞬移
-- [ ] D.2 凋灵改放骷髅头触发
+- [x] D.1 删高空硬瞬移 (V5.28.3)
+  - VirtualPlayerManager.updatePlayerMetadata 删掉 Y>100 主世界硬 teleport 块,保留代码注释解释 why
+- [x] D.2 凋灵改放骷髅头触发 (V5.28.3)
+  - BeaconQuest.tickBuildingWither 改成真协议:7 步 interactBlock(4 灵魂沙 + 3 凋零骷髅头),vanilla WitherSkullBlock.onPlaced 自动检测 T-shape 召唤;ensureInHotbar 走 SWAP 切到 hotbar,placeBlockAt 算 hit point 朝支撑面发包
 
 ### Phase E — 元数据反聚类
-- [ ] E.1 Latency 真实化(删开局直写)
-- [ ] E.2 Brand 包多样化
-- [ ] E.3 Skin 复用调研 + 修复
+- [x] E.1 Latency 真实化(删开局直写) (V5.28.5)
+  - PlayerSpawner 删除 `maohi$setLatency(40+rand(140))` 硬塞;vanilla 默认 0,PingPongHandler 后续接管
+- [x] E.2 Brand 包多样化 (V5.28.5)
+  - 新建 `util/BrandRoller.java`,按 UUID hash deterministic pick:70% vanilla / 15% fabric / 10% forge / 5% lunarclient
+- [x] E.3 Skin 注入 GameProfile + fallback 池 (V5.28.5)
+  - **审计发现**:旧 spawn() 收了 skin 参数**从未使用**,所有 fetch/cache 努力白费 → 假人全是 default Steve/Alex
+  - **修复**:`profile.getProperties().put("textures", new Property(name, value, signature))` 真正注入
+  - ProfileFetcher.pickRandomCachedSkin fallback 现在生效(撞名失败时复用别的假人 skin,优于 default)
 
 ### Phase F — 冗余清理
 - [x] F.1 删 setSelectedSlot 双写
@@ -327,7 +367,7 @@ MovementInputHelper.sendInput(player,
 - **Phase D.1 后**会增加假人卡死率,如果太多影响可玩性,改备选方案"卡 30 秒后 logout 重生"
 - **Phase E.3** 没有现成方案,可能需要重写整个 SkinService
 
----
+--- 
 
 ## 12. 完成定义(Done Definition)
 

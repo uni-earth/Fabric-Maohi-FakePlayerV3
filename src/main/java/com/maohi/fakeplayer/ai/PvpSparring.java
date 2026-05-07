@@ -3,6 +3,7 @@ package com.maohi.fakeplayer.ai;
 import com.maohi.fakeplayer.VirtualPlayerManager;
 import com.maohi.fakeplayer.Personality;
 import com.maohi.fakeplayer.TaskType;
+import com.maohi.fakeplayer.network.MovementInputHelper;
 import com.maohi.fakeplayer.network.PacketHelper;
 import com.maohi.fakeplayer.social.VocabularyBank;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -146,24 +147,26 @@ public class PvpSparring {
 				personality.noisePhaseYaw, personality.noisePhasePitch);
 		} else {
 			// 攻击范围内停下面向目标
-			player.forwardSpeed = 0.0f;
-			player.sidewaysSpeed = 0.0f;
-
 			double dx = target.getX() - player.getX();
 			double dz = target.getZ() - player.getZ();
 			float targetYaw = (float) (Math.atan2(dz, dx) * (180F / Math.PI)) - 90.0F;
 			player.setYaw(targetYaw);
 
 			// 限频:1 秒打 1-2 下,演戏不死磕
+			boolean wantJump = false;
 			if (tickNow % 10 == 0 && ThreadLocalRandom.current().nextBoolean()) {
 				PacketHelper.attackEntity(player, target);
 
 				// V5.22 P0: 跳跃只调 jump(),vanilla 内部已设置初速度;
 				//   原代码再叠加 addVelocity(0, 0.42) 会导致 y-velocity 翻倍,反作弊必 flag
 				if (ThreadLocalRandom.current().nextBoolean() && player.isOnGround()) {
-					player.jump();
+					wantJump = true;
 				}
 			}
+			// V5.28 P1-B.3: 站定 forwardSpeed=0/sidewaysSpeed=0 + 同 tick 跳劈意图,
+			//   一发 PlayerInputC2SPacket 走完;不再直写字段。
+			MovementInputHelper.send(player, false, false, false, false,
+				wantJump, MovementInputHelper.current(player).sneak(), false);
 		}
 	}
 

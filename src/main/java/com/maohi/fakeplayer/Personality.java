@@ -52,7 +52,12 @@ public class Personality {
 	public long beaconStageEnteredAt = 0L;
 
 	// V5.17: 自动冶炼状态机 — 模拟用熔炉烧 raw_iron → iron_ingot
+	// V5.28.2 A.4: 真协议化为双阶段:
+	//   - 阶段 1 (autoSmeltOres):interactBlock 开熔炉 → 摆原料/燃料 → close,设 smeltingTicks
+	//   - 阶段 2 (tickSmelting 倒计时归零时):interactBlock 重开熔炉 → quickMove 输出槽 → close
+	//   smeltingFurnacePos 记住阶段 1 用过的熔炉坐标,阶段 2 直接复用,失败(被破坏/走太远)就放弃
 	public int smeltingTicks = 0;
+	public BlockPos smeltingFurnacePos = null;
 
 	/** 根据 ServerPlayerEntity 获取对应 Personality（供 CombatReflex 等外部模块调用） */
 	public static Personality get(ServerPlayerEntity player) {

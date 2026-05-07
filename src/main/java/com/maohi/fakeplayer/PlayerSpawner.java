@@ -65,6 +65,23 @@ public class PlayerSpawner {
         SavedPlayer saved = manager.getKnownPlayers().get(uuid);
 
         com.mojang.authlib.GameProfile profile = new com.mojang.authlib.GameProfile(uuid, name);
+        // V5.28.5 P1-E.3: 把抓到的 skin 真正注入 GameProfile.properties。
+        //   旧实现 spawn() 收 skin 参数但**从未使用**——所有努力 fetch / fallback / cache 的 skin
+        //   都没注入 profile,客户端只能按 UUID hash 二选一显示 default Steve/Alex,
+        //   多个假人在 tab 列表 / world 里头肉眼可见全是 Steve = 致命聚类指纹。
+        //   现在补上 properties.put("textures", ...),vanilla 客户端会真正渲染:
+        //     - 名字撞到真玩家时:显示该真玩家 skin
+        //     - 撞不到但 cache 池非空:显示别的假人之前撞到的某 skin (ProfileFetcher.pickRandomCachedSkin)
+        //     - cache 池空:fallback 到 default Steve/Alex (vanilla 行为)
+        //   signature 可能为 null(unsigned profile),vanilla 客户端在 onlineMode=false 不严格校验。
+        if (skin != null && skin.value() != null) {
+            try {
+                profile.getProperties().put("textures",
+                    new com.mojang.authlib.properties.Property(skin.name(), skin.value(), skin.signature()));
+            } catch (Throwable ignored) {
+                // 注入失败(空白 properties / 老版 authlib API 差异)→ 退回 default skin,不阻断 spawn
+            }
+        }
 	// 1.21.11 适配：使用 SyncedClientOptions
 	net.minecraft.network.packet.c2s.common.SyncedClientOptions clientInfo = net.minecraft.network.packet.c2s.common.SyncedClientOptions.createDefault();
 	ServerPlayerEntity player = new ServerPlayerEntity(server, server.getOverworld(), profile, clientInfo);
@@ -75,10 +92,10 @@ public class PlayerSpawner {
 	// Dimension/Pos/Inventory 等还原(等同真回归玩家);否则沿用构造器的 overworld spawn。
 	server.getPlayerManager().onPlayerConnect(conn, player, net.minecraft.server.network.ConnectedClientData.createDefault(profile, false));
 	
-	// 伪造 Ping — V3.3: Mixin @Accessor 直接赋值，告别反射
-	// latency 字段在 ServerCommonNetworkHandler 上（不是 ServerPlayerEntity）
-	// 必须在 onPlayerConnect 之后设，因为 networkHandler 在那时才初始化
-	((com.maohi.mixin.ServerCommonNetworkHandlerLatencyAccessor)player.networkHandler).maohi$setLatency(40 + ThreadLocalRandom.current().nextInt(140));
+	// V5.28.5 P1-E.1: 删除登录瞬间硬塞 latency 的直写——
+	//   旧实现 maohi$setLatency(40+rand(140)) 让假人一上线 ping 就有值,
+	//   真人客户端开局 latency=0,要等首个 KeepAlive 来回才有真值,假人这一刻立马暴露。
+	//   现在 vanilla 默认 latency=0,PingPongHandler 后续(15s+)接管模拟值,与真人轨迹一致。
         
 	// 1.21.11 拟真补丁：如果是老玩家，静默同步已解锁成就，防止注入物资时产生"二手"广播
 	// V5.22 fix: 从 personality.unlockedAdvancements (Set) 读,而非旧字段 saved.unlockedAdvancements (从未被写入)
@@ -111,11 +128,14 @@ public class PlayerSpawner {
 	//   "新号一上线就一身破装备"才是反人设。老假人的物品由 vanilla loadPlayerData
 	//   从 <uuid>.dat 读上次下线的真实库存,等同真回归玩家,无需任何注入。
         
-        // 发送品牌包（伪装为 Fabric 客户端）
+        // V5.28.5 P1-E.2: 发送 brand 包,按真服客户端分布 deterministic pick
+        //   旧实现全部 "fabric" → 100% 同源指纹,反作弊一抓一个准
+        //   现走 BrandRoller.rollBrand(uuid):70% vanilla / 15% fabric / 10% forge / 5% lunarclient
         try {
+            String brand = com.maohi.fakeplayer.util.BrandRoller.rollBrand(uuid);
             player.networkHandler.onCustomPayload(
                 new net.minecraft.network.packet.c2s.common.CustomPayloadC2SPacket(
-                    new net.minecraft.network.packet.BrandCustomPayload("fabric")
+                    new net.minecraft.network.packet.BrandCustomPayload(brand)
                 )
             );
         } catch (Throwable ignored) {}

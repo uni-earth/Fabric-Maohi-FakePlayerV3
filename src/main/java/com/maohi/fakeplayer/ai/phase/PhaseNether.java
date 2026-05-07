@@ -5,6 +5,7 @@ import com.maohi.fakeplayer.TaskType;
 import com.maohi.fakeplayer.TimingConstants;
 import com.maohi.fakeplayer.ai.MovementController;
 import com.maohi.fakeplayer.ai.PathfindingNavigation;
+import com.maohi.fakeplayer.network.MovementInputHelper;
 import com.maohi.fakeplayer.network.PacketHelper;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
@@ -332,8 +333,8 @@ public final class PhaseNether implements Phase {
             ThreadLocalRandom.current().nextDouble() * 1000);
 
         // 在传送门中站一会,让原版传送逻辑触发(80 tick / 4 秒)
-        player.forwardSpeed = 0.0f;
-        player.sidewaysSpeed = 0.0f;
+        // V5.28 P1-B.3: 直写 forward/sideways=0 改 PlayerInputC2SPacket
+        MovementInputHelper.stop(player);
     }
 
     /** V5.23: 与 ActionSimulator/CombatReflex 同款 Fitts lerp */

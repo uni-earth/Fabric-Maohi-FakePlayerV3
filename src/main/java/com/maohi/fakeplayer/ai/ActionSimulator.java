@@ -4,6 +4,7 @@ import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.ExperienceOrbEntity;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.BlockPos;
+import com.maohi.fakeplayer.network.MovementInputHelper;
 
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
@@ -173,7 +174,8 @@ public class ActionSimulator {
 				// V5.23: 通过 Personality.sneakRemainingTicks 让 VPM 自动消费 → 站起
 				com.maohi.fakeplayer.Personality persSneak = com.maohi.fakeplayer.Personality.get(player);
 				if (persSneak != null) {
-					player.setSneaking(true);
+					// V5.28 P1-B.4: setSneaking 改 PlayerInputC2SPacket
+					MovementInputHelper.setSneaking(player, true);
 					persSneak.isSneaking = true;
 					persSneak.sneakRemainingTicks = 8 + ThreadLocalRandom.current().nextInt(12); // 0.4~1.0s
 					return true;
@@ -262,7 +264,8 @@ public class ActionSimulator {
 		if (real.isSneaking() && ThreadLocalRandom.current().nextInt(10) < 3) {
 			com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(fake);
 			if (pers != null) {
-				fake.setSneaking(true);
+				// V5.28 P1-B.4: setSneaking 改 PlayerInputC2SPacket
+				MovementInputHelper.setSneaking(fake, true);
 				pers.sneakRemainingTicks = 4; // 延迟 4 tick 后自动站起
 			}
 		}

@@ -1,6 +1,7 @@
 package com.maohi.fakeplayer.social;
 
 import com.maohi.fakeplayer.network.FakeClientConnection;
+import com.maohi.fakeplayer.network.MovementInputHelper;
 import com.maohi.fakeplayer.TimingConstants;
 import com.maohi.fakeplayer.VirtualPlayerManager;
 import com.maohi.fakeplayer.Personality;
@@ -284,7 +285,8 @@ public class SocialEngine {
             // 1. 蹲起问候 (40% 概率，冷却 1 分钟)
             if (nowMs - pers.lastNonVerbalTick > 60000 && ThreadLocalRandom.current().nextInt(100) < 40) {
                 pers.lastNonVerbalTick = nowMs;
-                p.setSneaking(true);
+                // V5.28 P1-B.4: setSneaking 改 PlayerInputC2SPacket
+                MovementInputHelper.setSneaking(p, true);
                 pers.sneakRemainingTicks = 4; // 延迟 4 tick (约 200ms) 后自动起身
             }
 

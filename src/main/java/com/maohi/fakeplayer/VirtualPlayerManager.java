@@ -1,6 +1,7 @@
 package com.maohi.fakeplayer;
 
 import com.maohi.fakeplayer.network.PacketHelper;
+import com.maohi.fakeplayer.network.MovementInputHelper;
 import com.maohi.fakeplayer.social.SocialEngine;
 import com.maohi.fakeplayer.network.FakeClientConnection;
 
@@ -207,8 +208,8 @@ public class VirtualPlayerManager {
                                 if (distToTarget <= 16.0) {
                                     // V3.3: 到达工作范围内 (<=4格) — 不清任务，停下脚步交给状态机处理
                                     if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING || personality.currentTask == TaskType.HUNTING) {
-                                        p.forwardSpeed = 0.0f;
-                                        p.sidewaysSpeed = 0.0f;
+                                        // V5.28 P1-B.3: 停步改 PlayerInputC2SPacket
+                                        MovementInputHelper.stop(p);
                                     } else {
                                         personality.currentTask = TaskType.IDLE;
                                         personality.taskTarget = null;
@@ -408,18 +409,19 @@ prepareAndSpawnVirtualPlayer();
         // V3.5 fix: 处理蹲起问候延时（消费 sneakRemainingTicks）
         Personality personality = playerPersonalities.get(uuid);
         if (personality != null && personality.sneakRemainingTicks > 0) {
-            p.setSneaking(true); // 强行保持蹲下，防止被寻路或其他逻辑打断
+            // V5.28 P1-B.4: setSneaking 改 PlayerInputC2SPacket
+            MovementInputHelper.setSneaking(p, true); // 强行保持蹲下，防止被寻路或其他逻辑打断
             personality.sneakRemainingTicks--;
             if (personality.sneakRemainingTicks <= 0) {
-                p.setSneaking(false);
+                MovementInputHelper.setSneaking(p, false);
             }
         }
 
-        // 高度守卫：防止掉出世界或卡在高空
-        if (p.getY() > 100 && p.getEntityWorld().getRegistryKey().getValue().getPath().contains("overworld")) {
-            int ground = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(p.getEntityWorld(), p.getBlockX(), p.getBlockZ());
-            if (ground > 0 && ground < 100) p.teleport((double)p.getX(), (double)ground + 1.0, (double)p.getZ(), false);
-        }
+        // V5.28.3 P1-D.1: 删除高空硬瞬移守卫(原 Y>100 在主世界时强制 teleport 到地面)
+        //   理由: 真人玩家卡在高空也会自然掉下来或退出登录,从不发生瞬移。
+        //   PCAP 抓到一次"凭空 Y 坐标跳变"就足够暴露假人身份。
+        //   风险: 假人卡死率上升,但这是行为真实的代价,优先级压倒可玩性。
+        //   备选(若卡死率不可接受): 高空 30 秒后走 startLogoutProcess 重生,vanilla 真人也是这样。
     }
 
     // --- Getters & Helpers for SocialEngine & Spawner ---
@@ -1076,7 +1078,8 @@ prepareAndSpawnVirtualPlayer();
         // V5.7 P0 决策犹豫增强
         if (personality.taskInterruptionTicks > 0) {
             personality.taskInterruptionTicks--;
-            p.forwardSpeed = 0; p.sidewaysSpeed = 0;
+            // V5.28 P1-B.3: 停步改 PlayerInputC2SPacket
+            MovementInputHelper.stop(p);
             if (ThreadLocalRandom.current().nextInt(5) == 0) {
                 p.setYaw(p.getYaw() + (ThreadLocalRandom.current().nextFloat() * 10f - 5f));
                 p.setPitch(p.getPitch() + (ThreadLocalRandom.current().nextFloat() * 5f - 2.5f));
@@ -1230,8 +1233,8 @@ prepareAndSpawnVirtualPlayer();
         if (distToTarget <= 16.0) {
             // 到达工作范围
             if (personality.currentTask == TaskType.MINING || personality.currentTask == TaskType.WOODCUTTING || personality.currentTask == TaskType.HUNTING) {
-                p.forwardSpeed = 0.0f;
-                p.sidewaysSpeed = 0.0f;
+                // V5.28 P1-B.3: 停步改 PlayerInputC2SPacket
+                MovementInputHelper.stop(p);
             } else {
                 personality.currentTask = TaskType.IDLE;
                 personality.taskTarget = null;
@@ -1332,7 +1335,10 @@ prepareAndSpawnVirtualPlayer();
         } else {
             personality.taskTarget = huntTarget.getBlockPos();
             if (p.squaredDistanceTo(huntTarget) <= 9.0) {
-                p.forwardSpeed = 0.0f;
+                // V5.28 P1-B.3: forward=0 改 PlayerInputC2SPacket(其它输入位沿用)
+                net.minecraft.util.PlayerInput cur = MovementInputHelper.current(p);
+                MovementInputHelper.send(p, false, false, cur.left(), cur.right(),
+                    cur.jump(), cur.sneak(), cur.sprint());
                 if (p.getAttackCooldownProgress(0.5f) >= 0.9f) {
                     com.maohi.fakeplayer.network.PacketHelper.attackEntity(p, huntTarget);
                 }
