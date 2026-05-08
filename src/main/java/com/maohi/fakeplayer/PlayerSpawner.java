@@ -19,6 +19,20 @@ import java.util.concurrent.ThreadLocalRandom;
 public class PlayerSpawner {
 
     /**
+     * V5.37: world spawn 位置缓存。
+     * 反射读 LevelProperties 时 getSpawnPos / getSpawnX-Y-Z 在某些 yarn build 上会
+     * 返回 ±1 不一致的值(record vs raw int 抖动),导致同一 session 多个假人 Y 漂动 1 格
+     * = 真人服里 worldSpawn 一次 session 内恒定的特征不符。缓存第一次解析结果整个 session 复用。
+     * /setworldspawn 改了 spawn 不会马上反映,但与真人服重启逻辑一致(一次 session 内 worldSpawn 不变)。
+     */
+    private static volatile net.minecraft.util.math.BlockPos cachedWorldSpawn = null;
+
+    /** 服务器停止时调用,清掉 session 级缓存 */
+    public static void resetWorldSpawnCache() {
+        cachedWorldSpawn = null;
+    }
+
+    /**
      * 准备并可能发起异步获取皮肤的流程。
      * 当准备就绪后，会回调 VirtualPlayerManager 执行最终上线。
      */
@@ -102,6 +116,7 @@ public class PlayerSpawner {
 		// 还分布在 ServerWorld 和 LevelProperties 两个类),硬编码任一个都被 CI yarn 砸过。
 		// 反射兜底:在 overworld 和 overworld.getLevelProperties() 上各试 getSpawnPos +
 		// getSpawnX/Y/Z,谁先命中用谁。命中失败再用 Heightmap 在 (0,0) 找地表 Y 兜底。
+		boolean cacheHitBefore = (cachedWorldSpawn != null);
 		net.minecraft.util.math.BlockPos spawnPos = readWorldSpawnPos(overworld);
 		player.refreshPositionAndAngles(
 			spawnPos.getX() + 0.5,
@@ -109,6 +124,13 @@ public class PlayerSpawner {
 			spawnPos.getZ() + 0.5,
 			0.0F,
 			0.0F);
+		// V5.37 调试 log:每次 spawn 都打,验证缓存生效后所有假人 Y 完全一致
+		// 稳定后(连看几个 session 都同 Y) 可以删
+		org.slf4j.LoggerFactory.getLogger("Server thread").info(
+			"[MaohiTask] [{}] spawn_pos cached={} resolved=({},{},{}) playerPos=({},{},{})",
+			name, cacheHitBefore,
+			spawnPos.getX(), spawnPos.getY(), spawnPos.getZ(),
+			player.getX(), player.getY(), player.getZ());
 	}
 
 	ClientConnection conn = new FakeClientConnection();
@@ -182,6 +204,14 @@ public class PlayerSpawner {
      *   3) Heightmap MOTION_BLOCKING 在 (0,0) 找地表 Y(最后兜底,绝不返回 (0,0,0))
      */
     private static net.minecraft.util.math.BlockPos readWorldSpawnPos(net.minecraft.server.world.ServerWorld world) {
+        net.minecraft.util.math.BlockPos cached = cachedWorldSpawn;
+        if (cached != null) return cached;
+        net.minecraft.util.math.BlockPos resolved = doReadWorldSpawnPos(world);
+        cachedWorldSpawn = resolved;
+        return resolved;
+    }
+
+    private static net.minecraft.util.math.BlockPos doReadWorldSpawnPos(net.minecraft.server.world.ServerWorld world) {
         // 1) LevelProperties 路径
         try {
             Object props = world.getLevelProperties();

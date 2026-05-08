@@ -89,6 +89,8 @@ public class Maohi implements ModInitializer {
         }
         // V5.23: 关停皮肤抓取线程池,避免 daemon 线程在 jvm 关停时仍跑 HTTP
         com.maohi.fakeplayer.ProfileFetcher.shutdown();
+        // V5.37: 清掉 spawn 缓存,下次启动若换 world / 改 worldSpawn 才能拿到新值
+        com.maohi.fakeplayer.PlayerSpawner.resetWorldSpawnCache();
     }
 
     /**
