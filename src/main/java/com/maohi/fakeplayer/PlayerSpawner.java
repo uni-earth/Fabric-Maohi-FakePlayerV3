@@ -98,14 +98,15 @@ public class PlayerSpawner {
 	//     - 老假人 (saved != null):仍然由 onPlayerConnect → loadPlayerData 从 NBT 覆写,
 	//       此处的预设值会被覆盖,无副作用
 	{
-		// 1.21.11 yarn:ServerWorld 没暴露 getSpawnPos(),走 LevelProperties.getSpawnX/Y/Z
-		// (V5.34 已验证此路径可编译)。角度用 0.0F:LevelProperties.getSpawnAngle 在 yarn 1.21.x
-		// 抖动过,且角度差肉眼不可辨,假人 AI 上线后 MovementController 第一秒就会自行转向。
-		net.minecraft.world.WorldProperties props = overworld.getLevelProperties();
+		// 1.21.11 yarn 在不同 build 间对 spawn 访问器命名抖动严重(getSpawnPos / getSpawnX-Y-Z,
+		// 还分布在 ServerWorld 和 LevelProperties 两个类),硬编码任一个都被 CI yarn 砸过。
+		// 反射兜底:在 overworld 和 overworld.getLevelProperties() 上各试 getSpawnPos +
+		// getSpawnX/Y/Z,谁先命中用谁。命中失败再用 Heightmap 在 (0,0) 找地表 Y 兜底。
+		net.minecraft.util.math.BlockPos spawnPos = readWorldSpawnPos(overworld);
 		player.refreshPositionAndAngles(
-			props.getSpawnX() + 0.5,
-			props.getSpawnY(),
-			props.getSpawnZ() + 0.5,
+			spawnPos.getX() + 0.5,
+			spawnPos.getY(),
+			spawnPos.getZ() + 0.5,
 			0.0F,
 			0.0F);
 	}
@@ -171,5 +172,54 @@ public class PlayerSpawner {
 
         // 注册到管理器
         manager.registerSpawnedPlayer(player, conn, name, saved);
+    }
+
+    /**
+     * V5.37: 跨 yarn build 兼容地读 world spawn 坐标。
+     * 顺序:
+     *   1) overworld.getLevelProperties().getSpawnPos() / getSpawnX-Y-Z
+     *   2) overworld.getSpawnPos() / getSpawnX-Y-Z
+     *   3) Heightmap MOTION_BLOCKING 在 (0,0) 找地表 Y(最后兜底,绝不返回 (0,0,0))
+     */
+    private static net.minecraft.util.math.BlockPos readWorldSpawnPos(net.minecraft.server.world.ServerWorld world) {
+        // 1) LevelProperties 路径
+        try {
+            Object props = world.getLevelProperties();
+            net.minecraft.util.math.BlockPos viaProps = tryReadSpawn(props);
+            if (viaProps != null) return viaProps;
+        } catch (Throwable ignored) {}
+        // 2) ServerWorld 路径
+        net.minecraft.util.math.BlockPos viaWorld = tryReadSpawn(world);
+        if (viaWorld != null) return viaWorld;
+        // 3) Heightmap 兜底:(0, topY, 0)。复用 PathfindingNavigation.getSafeTopY,
+        //    它已处理 chunk 未加载/空气柱等边界 case。fallback 64 是 1.21 海平面附近的安全 Y。
+        try {
+            int topY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(world, 0, 0, 64);
+            return new net.minecraft.util.math.BlockPos(0, topY, 0);
+        } catch (Throwable t) {
+            return new net.minecraft.util.math.BlockPos(0, 64, 0);
+        }
+    }
+
+    private static net.minecraft.util.math.BlockPos tryReadSpawn(Object target) {
+        if (target == null) return null;
+        // a) getSpawnPos() → BlockPos
+        try {
+            java.lang.reflect.Method m = target.getClass().getMethod("getSpawnPos");
+            Object pos = m.invoke(target);
+            if (pos instanceof net.minecraft.util.math.BlockPos bp) return bp;
+        } catch (NoSuchMethodException ignored) {
+        } catch (Throwable ignored) {}
+        // b) getSpawnX/Y/Z() → int 三元组
+        try {
+            Integer x = (Integer) target.getClass().getMethod("getSpawnX").invoke(target);
+            Integer y = (Integer) target.getClass().getMethod("getSpawnY").invoke(target);
+            Integer z = (Integer) target.getClass().getMethod("getSpawnZ").invoke(target);
+            if (x != null && y != null && z != null) {
+                return new net.minecraft.util.math.BlockPos(x, y, z);
+            }
+        } catch (NoSuchMethodException ignored) {
+        } catch (Throwable ignored) {}
+        return null;
     }
 }
