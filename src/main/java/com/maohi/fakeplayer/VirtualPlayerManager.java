@@ -162,6 +162,16 @@ public class VirtualPlayerManager {
 
 	// V5.22: 重卡整体熔断——移动入队也要停,否则主线程队列继续积压
 	if (mspt > 80) {
+		// V5.39: 熔断时打节流 warn(30s 一条),与 processHeavyAILogic 内的 mspt_throttle 对齐。
+		//   原实现:这里 continue 后 processHeavyAILogic 根本不会被调,内部那条 warn 永远不打 →
+		//   外面看到的现象是"假人能聊天但永远不动",诊断像挤牙膏。现在外层熔断也打日志。
+		long now = System.currentTimeMillis();
+		if (now - lastMsptThrottleWarnAt > 30_000L) {
+			lastMsptThrottleWarnAt = now;
+			org.slf4j.LoggerFactory.getLogger("Server thread").warn(
+				"[MaohiTask] mspt_throttle_outer mspt={} bots={} — AI loop 整轮跳过(此后 30s 内同事件不再重复)",
+				String.format("%.1f", mspt), virtualPlayerUUIDs.size());
+		}
 		Thread.sleep(currentSleepMs);
 		continue;
 	}

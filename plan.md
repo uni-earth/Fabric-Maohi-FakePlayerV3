@@ -4,26 +4,6 @@
 
 ---
 
-## V5.37 spawn (0,0,0) 修复 + spawn pos 缓存（**待 build 验证**）
-
-**问题**：1.21.11 vanilla `ServerPlayerEntity` 构造器不再把新实体放到 `world.getSpawnPos()`，假人留在 (0,0,0)。`/setworldspawn 0 80 0` 后假人仍 `at (0.0, 0.0, 0.0)`，Y=0 而非 80 → 排除"spawn 是 0,0,0"，是构造器路径问题。
-
-**改动**：
-- [PlayerSpawner.java:114-134](src/main/java/com/maohi/fakeplayer/PlayerSpawner.java#L114-L134)：在 `onPlayerConnect` 之前 `refreshPositionAndAngles` 到 worldSpawn
-- [PlayerSpawner.java:177-225](src/main/java/com/maohi/fakeplayer/PlayerSpawner.java#L177-L225)：反射跨 yarn build 兼容地读 worldSpawn（`getSpawnPos` / `getSpawnX-Y-Z` 在 ServerWorld 和 LevelProperties 都试），命中失败用 `PathfindingNavigation.getSafeTopY` 兜底
-- [PlayerSpawner.java:28-33](src/main/java/com/maohi/fakeplayer/PlayerSpawner.java#L28-L33)：缓存第一次解析结果整个 session 复用，避免反射两次 hit 不同 API path 导致 Y 漂动 1 格
-- [Maohi.java:91](src/main/java/com/maohi/Maohi.java#L91)：`onServerStopping` 调 `resetWorldSpawnCache()`
-
-**验证（待你 build）**：
-```
-[MaohiTask] [Bot1] spawn_pos cached=false resolved=(0,64,0) playerPos=(0.5,64.0,0.5)
-[MaohiTask] [Bot2] spawn_pos cached=true  resolved=(0,64,0) playerPos=(0.5,64.0,0.5)
-[MaohiTask] [Bot3] spawn_pos cached=true  resolved=(0,64,0) playerPos=(0.5,64.0,0.5)
-```
-所有 `playerPos` 完全一致（除非老假人 NBT 覆写）。
-
----
-
 ## V5.38 P0 ClientOptions 多样化 ⭐⭐⭐⭐⭐
 
 **指纹影响**：当前最大单点泄漏。100 个 bot 全 `en_us / view=12 / RIGHT / 0xff chat`，任何 ServerStats 直方图一眼穿。

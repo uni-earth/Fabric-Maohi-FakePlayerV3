@@ -41,8 +41,11 @@ public class MaohiConfig {
      * 开启后,VPM/Crafting/Smelting 在关键节点(上线、阶段切换、任务分配、挖断方块、合成、熔炼、
      * 失败兜底)按 [MaohiTask] [<bot 名>] event k=v ... 的格式打 INFO 日志,定位"任务有没有被分配/
      * 走到/破坏到/合成到"的链路问题。稳定后置 false 关闭,无运行时开销(callsite 一开始就 enabled() 早返)。
+     *
+     * V5.39: 默认改为 true。"假人 2 小时 0 成就"诊断期间需要 log,关掉了根本看不见 bot 在干啥。
+     * 等 STONE_AGE 链稳定后再考虑关。
      */
-    public boolean debugVirtualTasks = false;
+    public boolean debugVirtualTasks = true;
 
     /** 假人总容量 */
     public int maxVirtualPlayers = 15;
