@@ -225,6 +225,10 @@ public final class PhaseStoneAge implements Phase {
      * V5.29 G.3:在面朝方向 ±60° 扇形里采样 EXPLORE_RADIUS 格外的点(0.85~1.0 EXPLORE_RADIUS 距离),
      *   营造"定向跋涉"观感。原全随机 ±EXPLORE_RADIUS 立方体采样容易落在背后,
      *   假人会转身倒退 → 折返跑指纹明显。±60° 扇形 ≈ 真人野外探索不会回头的视野。
+     * V5.30+ Y-snap:目标 Y 锁到 MOTION_BLOCKING 表面,而不是和 player.getBlockY() 同高。
+     *   旧实现 add(dx, 0, dz) 在世界 spawn 落在 (0,0,0) 的 dev/test 路径下会让 bot 永远在
+     *   y=0 平面横向打转 — 表面树永远扫不到(BlockScanCache 半径仅 ±2 Y)→ logs=0 死循环。
+     *   chunk 未加载时回退 player.getBlockY(),不影响正常路径上的 bot。
      */
     private static void setExplore(Personality p, ServerPlayerEntity player) {
         ThreadLocalRandom rng = ThreadLocalRandom.current();
@@ -233,8 +237,12 @@ public final class PhaseStoneAge implements Phase {
         double dist = EXPLORE_RADIUS * (0.85 + rng.nextDouble() * 0.15); // 0.85~1.0 半径,贴外圈
         int dx = (int) Math.round(-Math.sin(rad) * dist);
         int dz = (int) Math.round(Math.cos(rad) * dist);
+        int tx = player.getBlockX() + dx;
+        int tz = player.getBlockZ() + dz;
+        int ty = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
+            player.getEntityWorld(), tx, tz, player.getBlockY());
         p.currentTask = TaskType.EXPLORING;
-        p.taskTarget = player.getBlockPos().add(dx, 0, dz);
+        p.taskTarget = new BlockPos(tx, ty, tz);
         p.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_EXPLORE;
     }
 }

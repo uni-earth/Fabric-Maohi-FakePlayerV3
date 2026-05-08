@@ -66,7 +66,7 @@ public final class CraftingBehavior {
 		// 库存盘点 (一次遍历 + tag 比对)
 		int logCount = 0, plankCount = 0, stickCount = 0, cobbleCount = 0;
 		boolean hasAnyPickaxe = false, hasStonePickaxe = false, hasStoneSword = false, hasStoneAxe = false;
-		boolean hasCraftingTable = false;
+		boolean hasCraftingTable = false, hasFurnace = false;
 		for (int i = 0; i < inv.size(); i++) {
 			ItemStack s = inv.getStack(i);
 			if (s.isEmpty()) continue;
@@ -75,6 +75,7 @@ public final class CraftingBehavior {
 			else if (s.isOf(Items.STICK)) stickCount += s.getCount();
 			else if (s.isOf(Items.COBBLESTONE) || s.isOf(Items.COBBLED_DEEPSLATE)) cobbleCount += s.getCount();
 			else if (s.isOf(Items.CRAFTING_TABLE)) hasCraftingTable = true;
+			else if (s.isOf(Items.FURNACE)) hasFurnace = true;
 			Item it = s.getItem();
 			if (it == Items.WOODEN_PICKAXE || it == Items.STONE_PICKAXE
 				|| it == Items.IRON_PICKAXE || it == Items.DIAMOND_PICKAXE
@@ -89,6 +90,9 @@ public final class CraftingBehavior {
 
 		// 工作台是否在视野内(找不到时跳过需要工作台的合成)
 		boolean workbenchNearby = findCraftingTable(player, 6) != null;
+		// V5.30 W2S 收尾:熔炉是 STONE_AGE→IRON_AGE 唯一桥梁。bot 拿到石镐能挖 raw_iron,
+		// 但没熔炉 SmeltingBehavior.findFurnace 永远 null,raw_iron 就一直堆背包。
+		boolean furnaceNearby = findFurnaceBlock(player, 6) != null;
 
 		Item target = null;
 		int ticks = 40;
@@ -126,6 +130,12 @@ public final class CraftingBehavior {
 		else if (hasStonePickaxe && !hasStoneAxe && cobbleCount >= 3 && workbenchNearby) {
 			target = Items.STONE_AXE;
 			ticks = 40;
+		}
+		// 8. V5.30 W2S 收尾:有石镐 + cobble ≥ 8 + 视野无熔炉 + 背包无熔炉 → 合熔炉
+		//    工作台 3×3 上 8 块 cobble 围中空,中心留空。BlockPlacer.tryPlaceFurnace 之后落地。
+		else if (hasStonePickaxe && cobbleCount >= 8 && !hasFurnace && !furnaceNearby && workbenchNearby) {
+			target = Items.FURNACE;
+			ticks = 50;
 		}
 
 		if (target == null) return;
@@ -389,6 +399,13 @@ public final class CraftingBehavior {
 		if (target == Items.STONE_SWORD) return List.of(
 			new Placement(Items.COBBLESTONE, 2), new Placement(Items.COBBLESTONE, 5),
 			new Placement(Items.STICK, 8));
+		// V5.30 W2S 收尾:8 cobble 围中空 → FURNACE。slot 5 留空。
+		// findItemSlot(COBBLESTONE) 已扩展为接受 cobblestone / cobbled_deepslate 任一,
+		// 与 autoCraftStoneTools 里 cobbleCount 同时计两种保持一致。
+		if (target == Items.FURNACE) return List.of(
+			new Placement(Items.COBBLESTONE, 1), new Placement(Items.COBBLESTONE, 2), new Placement(Items.COBBLESTONE, 3),
+			new Placement(Items.COBBLESTONE, 4), new Placement(Items.COBBLESTONE, 6),
+			new Placement(Items.COBBLESTONE, 7), new Placement(Items.COBBLESTONE, 8), new Placement(Items.COBBLESTONE, 9));
 		if (target == Items.BEACON) return List.of(
 			new Placement(Items.GLASS, 1), new Placement(Items.GLASS, 2), new Placement(Items.GLASS, 3),
 			new Placement(Items.GLASS, 4), new Placement(Items.NETHER_STAR, 5), new Placement(Items.GLASS, 6),
@@ -405,6 +422,16 @@ public final class CraftingBehavior {
 	private static int findItemSlot(PlayerInventory inv, Item item) {
 		if (item == Items.OAK_LOG)    return findByTag(inv, ItemTags.LOGS);
 		if (item == Items.OAK_PLANKS) return findByTag(inv, ItemTags.PLANKS);
+		// V5.30 W2S 收尾:cobble 既可 cobblestone 也可 cobbled_deepslate(furnace 配方接受),
+		// 与 autoCraftStoneTools cobbleCount 同时计两种保持一致 — 否则 deepslate 起手 bot 会
+		// 通过 ≥8 阈值但 findItemSlot(COBBLESTONE) 找不到,recipe 失败。
+		if (item == Items.COBBLESTONE) {
+			for (int i = 0; i < inv.size(); i++) {
+				ItemStack s = inv.getStack(i);
+				if (s.isOf(Items.COBBLESTONE) || s.isOf(Items.COBBLED_DEEPSLATE)) return i;
+			}
+			return -1;
+		}
 		for (int i = 0; i < inv.size(); i++) {
 			if (inv.getStack(i).isOf(item)) return i;
 		}
@@ -431,6 +458,15 @@ public final class CraftingBehavior {
 	 * 与 EnchantItemTrigger.findEnchantingTable / HotStuffTrigger 同思路,贴脸 O(1) 命中。
 	 */
 	private static BlockPos findCraftingTable(ServerPlayerEntity player, int radius) {
+		return findBlockNearby(player, radius, Blocks.CRAFTING_TABLE);
+	}
+
+	/** V5.30 W2S 收尾:同结构扫熔炉 — autoCraftStoneTools 用,跳过"已有炉"分支 */
+	private static BlockPos findFurnaceBlock(ServerPlayerEntity player, int radius) {
+		return findBlockNearby(player, radius, Blocks.FURNACE);
+	}
+
+	private static BlockPos findBlockNearby(ServerPlayerEntity player, int radius, net.minecraft.block.Block block) {
 		ServerWorld world = player.getEntityWorld();
 		BlockPos center = player.getBlockPos();
 		BlockPos.Mutable mut = new BlockPos.Mutable();
@@ -440,7 +476,7 @@ public final class CraftingBehavior {
 					if (Math.max(Math.abs(dx), Math.abs(dz)) != d) continue;
 					for (int dy = -3; dy <= 3; dy++) {
 						mut.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz);
-						if (world.getBlockState(mut).isOf(Blocks.CRAFTING_TABLE)) {
+						if (world.getBlockState(mut).isOf(block)) {
 							return mut.toImmutable();
 						}
 					}

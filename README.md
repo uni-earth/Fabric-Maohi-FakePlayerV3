@@ -92,8 +92,8 @@ Fabric 配置：依赖 Fabric-API 0.136.0 与 Loader 0.19.2 及以上。
 Fabric-Maohi-FakePlayerV3/
 ├── src/main/java/com/maohi/
 │   ├── Maohi.java 🧩 # 【总入口】连接服务器与假人系统的总开关
-│   ├── MaohiConfig.java ✅ # 【配置中心】V5.21 三段会话时长分布 + 热重载配置
-│   ├── MaohiCommands.java ✅ # V5.23 已优化：safeRun 安全网 + /maohi off 真清场 + /maohi list 深度行 + /maohi list <name> 单假人成就详情
+│   ├── MaohiConfig.java ✅ # V5.30 已扩展：+debugVirtualTasks 任务调试日志开关 / V5.21 三段会话时长分布
+│   ├── MaohiCommands.java ✅ # V5.23 已优化：safeRun 安全网 + /maohi off 真清场 + /maohi list 深度行 + 单假人成就详情
 │   │
 │   ├── common/ # 📂 【底层工具包】
 │   │   ├── HttpUtils.java ✅ # V5.23 已优化：disconnect 路径修复 + Retry-After 解析 + 4MB body 上限
@@ -103,13 +103,14 @@ Fabric-Maohi-FakePlayerV3/
 │   │   └── TunnelManager.java 🔒 # 隧道生命周期与上报；按要求保留,不在本轮优化范围
 │   │
 │   ├── fakeplayer/ # 📂 【假人引擎核心】
-│   │   ├── VirtualPlayerManager.java ✅ # V5.22 已优化：会话分布/MSPT背压/断连顺序/trigger接入/环境去重
+│   │   ├── VirtualPlayerManager.java ✅ # V5.30 已扩展：任务失败计数 + force_explore 兜底 + 挖矿时序对齐 vanilla(去 miningSkill 倍率)/ V5.22 会话分布/MSPT 背压/断连顺序
+│   │   ├── TaskLogger.java ✅ # V5.30 新增：任务系统调试日志器,[MaohiTask] [bot] event k=v 格式,debugVirtualTasks 开关零成本
 │   │   ├── TimingConstants.java ✅ # V5.21 清理累计在线时长成就门槛遗留
 │   │   ├── PlayerSpawner.java ✅ # V5.22 已修：从 personality.unlockedAdvancements 回流老玩家成就
 │   │   ├── ProfileFetcher.java ✅ # V5.23 已优化：自有 daemon 池(并发上限 4) + 原子去重 + 服务器关停 shutdown
-│   │   ├── Personality.java ✅ # V5.22 已扩展：triggerPhaseSeed / nextTriggerCheckAt / pathfindCooldownUntil
+│   │   ├── Personality.java ✅ # V5.30 已扩展：+taskFailCount/lastFailedTarget/tablePlace*/lastLoggedPhase / V5.22 triggerPhaseSeed
 │   │   ├── SavedPlayer.java 🧩 # Gson 存档载体；当前保持兼容结构
-│   │   ├── TaskType.java 🧩 # 任务枚举:IDLE/EXPLORING/MINING/HUNTING 等
+│   │   ├── TaskType.java 🧩 # 任务枚举:IDLE/EXPLORING/MINING/HUNTING/WOODCUTTING/CRAFTING 等
 │   │   ├── GrowthPhase.java 🧩 # 成长阶段枚举:STONE/IRON/DIAMOND/NETHER/ENDGAME
 │   │   │
 │   │   ├── storage/ # 📂 【持久化层】
@@ -121,7 +122,9 @@ Fabric-Maohi-FakePlayerV3/
 │   │   ├── network/ # 📂 【防检测网络层】
 │   │   │   ├── FakeClientConnection.java 🧩 # EmbeddedChannel 网络面具；VPM 已修 closeChannel 调用顺序
 │   │   │   ├── PingPongHandler.java ✅ # V5.22 已优化：per-player baseline + AR(1) 自相关 + 对数正态右偏 + 重传尖峰
-│   │   │   └── PacketHelper.java ✅ # V5.22 已优化：attackEntity 单次扣血 + processBlockBreaking 节流批处理
+│   │   │   ├── PacketHelper.java ✅ # V5.22 已优化：attackEntity 单次扣血 + processBlockBreaking 节流批处理(1.21.11 sequence)
+│   │   │   ├── InventoryActionHelper.java 🧩 # V5.27+：真实 ClickSlot 协议(PICKUP/QUICK_MOVE/SWAP) + screen-to-inv 槽位映射
+│   │   │   └── MovementInputHelper.java 🧩 # V5.28+：PlayerInputC2SPacket 直写 forward/sideways/jump,替代字段写入
 │   │   │
 │   │   ├── ai/ # 📂 【假人行为 AI】
 │   │   │   ├── BehavioralDistributionValidator.java ✅ # V5.6 行为分布对齐：Box-Muller 正态分布
@@ -129,12 +132,12 @@ Fabric-Maohi-FakePlayerV3/
 │   │   │   ├── PathfindingNavigation.java ✅ # V5.23 已优化：5s 路径缓存(8 格分桶) + 邻居 cost 区分(平地/跳跃/跨越) + MAX_STEPS 64
 │   │   │   ├── EatingBehavior.java ✅ # V5.22 已优化：进食/喝药/拉弓状态机互斥 + 持续时长/release 时序合规
 │   │   │   ├── EquipmentBehavior.java ✅ # V5.23 已优化：autoEquipArmor 改用 equipStack 走原版装备链路
-│   │   │   ├── CraftingBehavior.java 🧩 # V5.20 已模块化拆分：合成窗口 + 挥手 + 结算
-│   │   │   ├── SmeltingBehavior.java 🧩 # V5.20 已模块化拆分：raw_iron → iron_ingot 便携冶炼
+│   │   │   ├── CraftingBehavior.java ✅ # V5.30 W2S 已扩展：早期生存链 plank/table/stick/wood pickaxe + 背包内 2×2 合成(table 鸡蛋问题) / V5.28.2 真协议化
+│   │   │   ├── SmeltingBehavior.java ✅ # V5.30 已埋点：smelt_start / smelt_done / smelt_fail 调试日志 / V5.20 真协议化冶炼
 │   │   │   ├── CombatReflex.java ✅ # V5.22 已优化：fleeUntilTick 截止 + 跳跃节流 + 视角缓动防瞬移
 │   │   │   ├── InventorySimulator.java ✅ # V5.22 已优化：初始背包加入锄头/种子/床/桶以支撑阶段1-2成就
 │   │   │   ├── ActionSimulator.java ✅ # V5.23 已优化：蹲下接 sneakRemainingTicks + 随机转向 lerp 缓动防瞬移
-│   │   │   ├── BlockPlacer.java ✅ # V5.23 已优化：火把放置 3 阶段状态机(切槽/交互/切回 跨 tick) 防 0ms 切换检测
+│   │   │   ├── BlockPlacer.java ✅ # V5.30 已扩展：+tryPlaceCraftingTable 工作台落地状态机(切槽→等→交互→切回) / V5.23 火把放置 3 阶段
 │   │   │   ├── PvpSparring.java ✅ # V5.22 已优化：反作弊跳跃/速度修复 + 70%血线停手 + 错峰扫描
 │   │   │   ├── AchievementSimulator.java 🧩 # V5.18 真实 vanilla 成就同步观察器；不伪造广播
 │   │   │   ├── AFKManager.java ✅ # V5.22 已优化：石器/铁器阶段禁 AFK，避免基础成就期摸鱼
@@ -161,11 +164,11 @@ Fabric-Maohi-FakePlayerV3/
 │   │   │   └── phase/ # 📂 【AI 进化阶段】
 │   │   │       ├── Phase.java 🧩 # V5.20 阶段策略接口(替代之前的 5-case switch)
 │   │   │       ├── PhaseContext.java ✅ # V5.22 已优化：新增 findStone 回调,支持真实 Stone Age
-│   │   │       ├── PhaseStoneAge.java ✅ # 第一阶段：已修找真石头,提升 Stone Age 达成率
-│   │   │       ├── PhaseIronAge.java ✅ # 第二阶段：已修不可达 Y=8 目标
-│   │   │       ├── PhaseDiamondAge.java ✅ # V5.23 已优化：背包摘要驱动 + 黑曜石/末影珍珠/钻石装备阈值优先级 + 地表 surfacePoint 兜底
+│   │   │       ├── PhaseStoneAge.java ✅ # V5.30 已重构：SubPhase 子状态机 WOOD_START/WOOD_CRAFT/STONE_START/STONE_TOOL/STONE_STABLE,基于真实 inv 数据驱动
+│   │   │       ├── PhaseIronAge.java ✅ # V5.28.6 P2-Scan 三分支 EXPLORING fallback / 已修不可达 Y=8 目标
+│   │   │       ├── PhaseDiamondAge.java ✅ # V5.30 已修：砍树 fallback 任务类型与目标对齐(不再 WOODCUTTING+地表点)/ V5.23 背包摘要驱动 + 黑曜石/末影珍珠/钻石装备阈值优先级
 │   │   │       ├── PhaseNether.java ✅ # V5.23 已优化：黑曜石 14→10 复制 bug 修复 + 视角 lerp + 扫描 5s 缓存 + 主世界缺料智能引导
-│   │   │       └── PhaseEnderDragon.java ✅ # V5.23 已优化：setPosition 瞬移→自然走入 + 实体扫描 14000→1 次 + 视角 lerp + 弓接 EatingBehavior 状态机 + 60s 退场宽限
+│   │   │       └── PhaseEnderDragon.java ✅ # V5.23 已优化：setPosition 瞬移→自然走入 + 实体扫描 14000→1 次 + 视角 lerp + 60s 退场宽限
 │   │   │
 │   │   ├── social/ # 📂 【拟真社交系统】
 │   │   │   ├── SocialEngine.java ✅ # V5.23 已优化：ChatResponder 9 类意图 + 假人对假人 20% 概率接话(限 2 跳防回声) + 最近择优响应
@@ -176,6 +179,7 @@ Fabric-Maohi-FakePlayerV3/
 │   │   │
 │   │   └── util/ # 📂 【辅助系统】
 │   │       ├── SkinService.java ✅ # V5.23 已优化：失败分类(NOT_FOUND 永久 / TIMEOUT 30s / IO 60s / HTTP_ERROR 5min) + 全局 429 Retry-After
+│   │       ├── BrandRoller.java 🧩 # V5.28+：客户端 brand metadata 多样性轮转(vanilla/fabric/forge),增加假人指纹差异性
 │   │       └── RandomUtils.java 🧩 # 名字/随机工具；当前稳定基础设施
 │   │
 │   └── mixin/ # 📂 【原版系统挂钩】(通过 Mixin 技术修改游戏核心逻辑)

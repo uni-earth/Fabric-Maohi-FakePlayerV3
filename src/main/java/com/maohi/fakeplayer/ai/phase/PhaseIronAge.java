@@ -84,6 +84,7 @@ public final class PhaseIronAge implements Phase {
      * V5.28.6 P2-Scan: scan 失败的兜底——派一个 EXPLORING 目标。
      * V5.29 G.3:在面朝方向 ±60° 扇形里采样 EXPLORE_RADIUS 格外的点(0.85~1.0 EXPLORE_RADIUS),
      *   营造"定向跋涉"观感。
+     * V5.30+ Y-snap:目标 Y 锁到 MOTION_BLOCKING 表面,避免 spawn 异常 bot 永远在 y=0 横向打转。
      */
     private static void setExplore(Personality p, net.minecraft.server.network.ServerPlayerEntity player) {
         ThreadLocalRandom rng = ThreadLocalRandom.current();
@@ -92,8 +93,12 @@ public final class PhaseIronAge implements Phase {
         double dist = EXPLORE_RADIUS * (0.85 + rng.nextDouble() * 0.15); // 0.85~1.0 半径,贴外圈
         int dx = (int) Math.round(-Math.sin(rad) * dist);
         int dz = (int) Math.round(Math.cos(rad) * dist);
+        int tx = player.getBlockX() + dx;
+        int tz = player.getBlockZ() + dz;
+        int ty = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
+            player.getEntityWorld(), tx, tz, player.getBlockY());
         p.currentTask = TaskType.EXPLORING;
-        p.taskTarget = player.getBlockPos().add(dx, 0, dz);
+        p.taskTarget = new net.minecraft.util.math.BlockPos(tx, ty, tz);
         p.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_EXPLORE;
     }
 }

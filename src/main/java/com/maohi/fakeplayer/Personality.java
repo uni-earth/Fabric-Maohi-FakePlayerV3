@@ -213,6 +213,17 @@ public class Personality {
 	public long tablePlaceAtTick = 0L;
 	public long tableRestoreAtTick = 0L;
 
+	// V5.30 W2S 收尾:熔炉落地状态机(同 table 节奏)。FURNACE 是 STONE_AGE→IRON_AGE 唯一桥梁,
+	// 不放下来 SmeltingBehavior.findFurnace 永远 null,raw_iron 堆背包。
+	public int furnacePlaceStage = 0;
+	public int furnaceOriginalSlot = 0;
+	public int furnaceTargetSlot = 0;
+	public BlockPos furnacePlaceBlockPos = null;
+	public Direction furnacePlaceFaceDir = null;
+	public BlockPos furnacePlaceSupportPos = null;
+	public long furnacePlaceAtTick = 0L;
+	public long furnaceRestoreAtTick = 0L;
+
 	// V5.23 聊天近期去重:VocabularyBank 选词时拒绝最近 5 条已说过的台词,
 	// 避免假人短时间内重复说同一句"rain rain go away"等。
 	// 用 ArrayDeque 当固定容量 FIFO 队列。

@@ -69,7 +69,12 @@ public final class AdventuringTimeTrigger implements AchievementTrigger {
 		int dist = 200 + ThreadLocalRandom.current().nextInt(300);
 		int fx = (int)(Math.cos(angle) * dist);
 		int fz = (int)(Math.sin(angle) * dist);
-		BlockPos far = player.getBlockPos().add(fx, 0, fz);
+		// V5.30+ Y-snap:长途旅行目标 Y 锁到 MOTION_BLOCKING 表面,避免 spawn 异常 bot 永远 y=0
+		int tx = player.getBlockX() + fx;
+		int tz = player.getBlockZ() + fz;
+		int ty = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
+			player.getEntityWorld(), tx, tz, player.getBlockY());
+		BlockPos far = new BlockPos(tx, ty, tz);
 
 		personality.longTripTarget = far;
 		personality.taskTarget = far;

@@ -331,6 +331,14 @@ public class BlockPlacer {
 
 	/** 切比雪夫距离 d 由近到远扫,Y±3,与 CraftingBehavior.findCraftingTable 一致。 */
 	private static boolean findCraftingTableNearby(ServerPlayerEntity player, int radius) {
+		return findBlockNearby(player, radius, net.minecraft.block.Blocks.CRAFTING_TABLE);
+	}
+
+	private static boolean findFurnaceNearby(ServerPlayerEntity player, int radius) {
+		return findBlockNearby(player, radius, net.minecraft.block.Blocks.FURNACE);
+	}
+
+	private static boolean findBlockNearby(ServerPlayerEntity player, int radius, net.minecraft.block.Block block) {
 		net.minecraft.server.world.ServerWorld world = player.getEntityWorld();
 		BlockPos center = player.getBlockPos();
 		BlockPos.Mutable mut = new BlockPos.Mutable();
@@ -340,11 +348,145 @@ public class BlockPlacer {
 					if (Math.max(Math.abs(dx), Math.abs(dz)) != d) continue;
 					for (int dy = -3; dy <= 3; dy++) {
 						mut.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz);
-						if (world.getBlockState(mut).isOf(net.minecraft.block.Blocks.CRAFTING_TABLE)) return true;
+						if (world.getBlockState(mut).isOf(block)) return true;
 					}
 				}
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * V5.30 W2S 收尾:把背包里的 FURNACE 落到地上。
+	 *
+	 * 与 tryPlaceCraftingTable 完全对称,字段独占 furnacePlace*,避免与 torch / table 状态机抢拍。
+	 * 触发条件相同:IDLE/MINING/WOODCUTTING/EXPLORING + 无 GUI + 不在战斗 + 6 格内无熔炉 + hotbar 有 FURNACE。
+	 *
+	 * 没这一步,bot 拿了石镐挖出 raw_iron 之后 SmeltingBehavior.findFurnace 永远 null,
+	 * raw_iron 堆满背包但永远变不成 iron_ingot,IRON_AGE 卡死(虽然 derivePhaseFromInventory
+	 * 看到 raw_iron 已经把 phase 推到 IRON_AGE,但实质链路断在熔炼这步)。
+	 */
+	public static void tryPlaceFurnace(ServerPlayerEntity player, Personality personality) {
+		long now = player.getEntityWorld().getTime();
+
+		if (personality.furnacePlaceStage > 0) {
+			advanceFurnacePlaceStateMachine(player, personality, now);
+			return;
+		}
+
+		if (personality.currentTask != TaskType.IDLE
+			&& personality.currentTask != TaskType.MINING
+			&& personality.currentTask != TaskType.WOODCUTTING
+			&& personality.currentTask != TaskType.EXPLORING) {
+			return;
+		}
+		if (player.currentScreenHandler != player.playerScreenHandler) return;
+		if (personality.isEating || personality.isSparring) return;
+		if (ThreadLocalRandom.current().nextInt(20) != 0) return;
+		if (findFurnaceNearby(player, 6)) return;
+
+		PlayerInventory inv = player.getInventory();
+		int furnaceSlot = -1;
+		for (int i = 0; i < inv.size(); i++) {
+			ItemStack stack = inv.getStack(i);
+			if (!stack.isEmpty() && stack.isOf(Items.FURNACE)) {
+				furnaceSlot = i;
+				break;
+			}
+		}
+		if (furnaceSlot == -1) return;
+		if (furnaceSlot > 8) return; // 同 table:必须先在 hotbar 才能 setSelectedSlot
+
+		BlockPos foot = player.getBlockPos();
+		Direction[] dirs = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
+		BlockPos placeAt = null, supportPos = null;
+		Direction faceDir = null;
+		for (Direction d : dirs) {
+			BlockPos cand = foot.offset(d);
+			if (!player.getEntityWorld().getBlockState(cand).isAir()) continue;
+			BlockPos under = cand.down();
+			if (player.getEntityWorld().getBlockState(under).isAir()) continue;
+			placeAt = cand;
+			supportPos = under;
+			faceDir = Direction.UP;
+			break;
+		}
+		if (placeAt == null) return;
+
+		int currentSlot = ((PlayerInventoryAccessor) inv).getSelectedSlot();
+		personality.furnaceOriginalSlot = currentSlot;
+		personality.furnaceTargetSlot = furnaceSlot;
+		personality.furnacePlaceBlockPos = placeAt;
+		personality.furnacePlaceSupportPos = supportPos;
+		personality.furnacePlaceFaceDir = faceDir;
+		personality.furnacePlaceAtTick = now + PLACE_DELAY_MIN
+			+ ThreadLocalRandom.current().nextInt(PLACE_DELAY_MAX - PLACE_DELAY_MIN + 1);
+		personality.furnacePlaceStage = 1;
+
+		if (currentSlot != furnaceSlot) {
+			PacketHelper.setSelectedSlot(player, furnaceSlot);
+		}
+	}
+
+	private static void advanceFurnacePlaceStateMachine(ServerPlayerEntity player, Personality personality, long now) {
+		if (personality.furnacePlaceStage == 1 && now >= personality.furnacePlaceAtTick) {
+			BlockPos placeAt = personality.furnacePlaceBlockPos;
+			BlockPos support = personality.furnacePlaceSupportPos;
+			Direction face = personality.furnacePlaceFaceDir;
+			if (placeAt == null || support == null || face == null) {
+				resetFurnacePlaceState(personality);
+				return;
+			}
+			if (!player.getEntityWorld().getBlockState(placeAt).isAir()) {
+				resetFurnacePlaceState(personality);
+				return;
+			}
+			ItemStack target = player.getInventory().getStack(personality.furnaceTargetSlot);
+			if (target.isEmpty() || !target.isOf(Items.FURNACE)) {
+				resetFurnacePlaceState(personality);
+				return;
+			}
+
+			Vec3d hitCenter = Vec3d.ofCenter(support).add(
+				face.getOffsetX() * 0.5,
+				face.getOffsetY() * 0.5,
+				face.getOffsetZ() * 0.5
+			);
+			double dx = hitCenter.x - player.getX();
+			double dy = hitCenter.y - (player.getY() + 1.62);
+			double dz = hitCenter.z - player.getZ();
+			double horizDist = Math.sqrt(dx * dx + dz * dz);
+			player.setYaw((float) Math.toDegrees(Math.atan2(-dx, dz)));
+			player.setPitch((float) -Math.toDegrees(Math.atan2(dy, horizDist)));
+
+			BlockHitResult hit = new BlockHitResult(hitCenter, face, support, false);
+			PacketHelper.interactBlock(player, Hand.MAIN_HAND, hit);
+			PacketHelper.swingHand(player, Hand.MAIN_HAND);
+
+			personality.furnaceRestoreAtTick = now + RESTORE_DELAY_MIN
+				+ ThreadLocalRandom.current().nextInt(RESTORE_DELAY_MAX - RESTORE_DELAY_MIN + 1);
+			personality.furnacePlaceStage = 2;
+			return;
+		}
+
+		if (personality.furnacePlaceStage == 2 && now >= personality.furnaceRestoreAtTick) {
+			int original = personality.furnaceOriginalSlot;
+			int currentSlot = ((PlayerInventoryAccessor) player.getInventory()).getSelectedSlot();
+			if (original != currentSlot) {
+				PacketHelper.setSelectedSlot(player, original);
+			}
+			resetFurnacePlaceState(personality);
+		}
+	}
+
+	private static void resetFurnacePlaceState(Personality p) {
+		p.furnacePlaceStage = 0;
+		p.furnaceOriginalSlot = 0;
+		p.furnaceTargetSlot = 0;
+		p.furnacePlaceBlockPos = null;
+		p.furnacePlaceSupportPos = null;
+		p.furnacePlaceFaceDir = null;
+		p.furnacePlaceAtTick = 0L;
+		p.furnaceRestoreAtTick = 0L;
 	}
 }

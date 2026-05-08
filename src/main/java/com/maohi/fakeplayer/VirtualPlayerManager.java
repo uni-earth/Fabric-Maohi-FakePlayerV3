@@ -804,6 +804,8 @@ prepareAndSpawnVirtualPlayer();
      * 切断"反复撞同一棵够不到的树/挖同一块够不到的石头"的卡死循环。
      * 朝当前 yaw ±60° 扇形采样,贴合 PhaseStoneAge.setExplore 的"定向跋涉"观感,而不是回头跑。
      * 30s 过期 → 期间假人走过去,再触发一次正常 assignRandomTask 重新扫资源,大概率新区域找得到。
+     * V5.30+ Y-snap:同 setExplore 一样把目标 Y 拉到 MOTION_BLOCKING 表面,
+     *   防止 bot 卡 y=0(spawn 异常)时永远在 y=0 横向打转、扫不到地表树/石头。
      */
     private void forceExploreAfterFailures(ServerPlayerEntity p, Personality personality) {
         ThreadLocalRandom rng = ThreadLocalRandom.current();
@@ -812,8 +814,12 @@ prepareAndSpawnVirtualPlayer();
         double dist = 50.0 + rng.nextDouble() * 20.0;  // 50~70 格
         int dx = (int) Math.round(-Math.sin(rad) * dist);
         int dz = (int) Math.round(Math.cos(rad) * dist);
+        int tx = p.getBlockX() + dx;
+        int tz = p.getBlockZ() + dz;
+        int ty = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
+            p.getEntityWorld(), tx, tz, p.getBlockY());
         personality.currentTask = TaskType.EXPLORING;
-        personality.taskTarget = p.getBlockPos().add(dx, 0, dz);
+        personality.taskTarget = new BlockPos(tx, ty, tz);
         personality.taskExpireTime = System.currentTimeMillis() + 30_000L;
         com.maohi.fakeplayer.TaskLogger.log(p, "force_explore",
             "target", personality.taskTarget, "lastFail", personality.lastFailedTarget);
@@ -1037,9 +1043,17 @@ prepareAndSpawnVirtualPlayer();
         // V5.22: 拉弓状态机检查——保证 useItem(bow) 之后一定 release,反作弊不 flag
         com.maohi.fakeplayer.ai.EatingBehavior.tickBowRelease(p, personality);
         com.maohi.fakeplayer.ai.EquipmentBehavior.autoEquipArmor(p);
-        if (detectPhase(p) == GrowthPhase.STONE_AGE) {
+        GrowthPhase phase = detectPhase(p);
+        // V5.30 W2S 收尾:STONE_AGE + IRON_AGE 都跑 autoCraftStoneTools。
+        //   原因:bot 一旦挖到 raw_iron,detectPhase 立刻推到 IRON_AGE,但此时如果还没造 FURNACE,
+        //   STONE_AGE 分支不再被调用 → 熔炉永远造不出来 → SmeltingBehavior 永远找不到熔炉 →
+        //   raw_iron 堆背包但永远不能变 iron_ingot,IRON_AGE 卡死。
+        //   IRON_AGE 阶段调用时,W2S 链前 7 个分支条件天然不满足(已有石镐/石剑/石斧),只有 FURNACE
+        //   分支可能命中(石镐 + cobble≥8 + 无熔炉)。开销可忽略。
+        if (phase == GrowthPhase.STONE_AGE || phase == GrowthPhase.IRON_AGE) {
             com.maohi.fakeplayer.ai.CraftingBehavior.autoCraftStoneTools(p);
-        } else {
+        }
+        if (phase != GrowthPhase.STONE_AGE) {
             com.maohi.fakeplayer.ai.CraftingBehavior.autoUpgradeTools(p);
             // V5.17: IRON_AGE 及以后才尝试自动冶炼（防 STONE_AGE 浪费 raw_iron）
             com.maohi.fakeplayer.ai.SmeltingBehavior.autoSmeltOres(p);
@@ -1235,6 +1249,10 @@ prepareAndSpawnVirtualPlayer();
 
         // V5.30 W2S 工作台落地:背包合成出 crafting_table 后,真人会找空地放下来再继续合 stick/木镐
         com.maohi.fakeplayer.ai.BlockPlacer.tryPlaceCraftingTable(p, personality);
+
+        // V5.30 W2S 收尾:熔炉落地,STONE_AGE→IRON_AGE 桥梁。bot 拿到石镐+8 cobble 后 CraftingBehavior
+        // 会合 FURNACE,这里把它从背包放到地上,后续 SmeltingBehavior.findFurnace 才能命中。
+        com.maohi.fakeplayer.ai.BlockPlacer.tryPlaceFurnace(p, personality);
         
         // P1-2 PVP 演戏切磋
         com.maohi.fakeplayer.ai.PvpSparring.tickSparring(p, personality, totalTicks.get());

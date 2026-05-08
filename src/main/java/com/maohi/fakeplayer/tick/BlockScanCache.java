@@ -34,6 +34,11 @@ public final class BlockScanCache {
 	 *     取代原 cube-scan 冷启动最坏 10 万次 getBlockState
 	 *   - 矿石 Y 向深度从 60 压到 20(假人当前 Y 已是挖矿层,再下探 20 足够)
 	 *   - 使用 BlockPos.Mutable 避免每格 new 一个 BlockPos
+	 *
+	 * V5.30+ Y-range fix:
+	 *   - 树/原木类(log/wood):用 chunk MOTION_BLOCKING heightmap 算"相对地表偏移",
+	 *     bot 在 y=0 也能扫到 y=64 的树。chunk 未加载就回退原 ±2 行为。
+	 *   - 普通方块(stone/cobble等):保留 ±2 — 假人脚下挖矿的常态范围。
 	 */
 	public BlockPos findNearestBlock(MinecraftServer server, ServerWorld world, BlockPos pos, int radius, String type) {
 		String cacheKey = key(pos, type);
@@ -48,8 +53,30 @@ public final class BlockScanCache {
 		if (radius > maxRadius) radius = maxRadius;
 
 		boolean isOre = type.contains("ore");
-		int yMin = isOre ? -20 : -2;
-		int yMax = 2;
+		boolean isLog = type.equals("log") || type.equals("logs") || type.equals("wood");
+		int yMin, yMax;
+		if (isOre) {
+			yMin = -20;
+			yMax = 2;
+		} else if (isLog) {
+			// 树长在地表 — 计算相对玩家 Y 的地表偏移,把扫描盒拉到地表覆盖
+			int surfaceY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
+				world, pos.getX(), pos.getZ(), Integer.MIN_VALUE);
+			if (surfaceY == Integer.MIN_VALUE) {
+				// chunk 未加载 → 回退原 ±2 行为
+				yMin = -2;
+				yMax = 2;
+			} else {
+				int relSurface = surfaceY - pos.getY();
+				// bot 在地面上 → relSurface≈0,正常 ±2~6 范围;
+				// bot 卡 y=0 → relSurface≈64,扫盒拉到 y=58~70 命中地表树
+				yMin = Math.min(-2, relSurface - 4);
+				yMax = Math.max(6, relSurface + 6);
+			}
+		} else {
+			yMin = -2;
+			yMax = 2;
+		}
 
 		BlockPos result = scanShells(world, pos, radius, yMin, yMax, type);
 		cache.put(cacheKey, new Object[]{result, System.currentTimeMillis() + CACHE_TTL_MS});
