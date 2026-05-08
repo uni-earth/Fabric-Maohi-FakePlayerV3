@@ -92,12 +92,12 @@ public class PlayerSpawner {
 	//   多服都看到 (0,0,0) 后此 log 会立刻给出根因(worldSpawn 是不是 0,0,0)。
 	//   稳定后这行可以删,留 [MaohiTask] 前缀方便 grep。
 	{
-		net.minecraft.util.math.BlockPos worldSpawn = server.getOverworld().getSpawnPos();
+		net.minecraft.world.WorldProperties props = server.getOverworld().getLevelProperties();
 		org.slf4j.LoggerFactory.getLogger("Server thread").info(
 			"[MaohiTask] spawn_diag name={} ctorPos=({},{},{}) worldSpawn=({},{},{}) saved={}",
 			name,
 			player.getX(), player.getY(), player.getZ(),
-			worldSpawn.getX(), worldSpawn.getY(), worldSpawn.getZ(),
+			props.getSpawnX(), props.getSpawnY(), props.getSpawnZ(),
 			(saved != null));
 	}
 
