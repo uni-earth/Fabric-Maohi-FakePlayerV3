@@ -140,8 +140,32 @@ public final class PhaseStoneAge implements Phase {
             case WOOD_START -> assignChopTree(player, personality, ctx);
 
             case WOOD_CRAFT -> {
-                // CraftingBehavior 在 VPM tickSurvivalAndProgression 每 tick 调用,
-                // 会自动按 plank → table → stick → wood pickaxe 顺序推链,这里只需保证原料够。
+                // V5.42 死锁 #1b:wooden_pickaxe 需要工作台 (3×3 配方),与 STONE_TOOL 同款"远离工作台"问题。
+                //   bot 合完 crafting_table 后 plank 消耗,reassign 把 bot 派去远处砍树,
+                //   走出工作台 6 格 → autoCraftStoneTools 的 wooden_pickaxe 分支 (要求 workbenchNearby)
+                //   永远不命中 → 即使 plank=6 stick=6 也合不出木镐 → 永卡 WOOD_CRAFT。
+                //   修复:有合木镐原料 (plank≥3 + stick≥2 + !hasAnyPickaxe) 时,优先走回工作台。
+                if (!d.hasAnyPickaxe && d.plankCount >= 3 && d.stickCount >= 2) {
+                    BlockPos workbench = com.maohi.fakeplayer.ai.CraftingBehavior
+                        .findCraftingTable(player, WORKBENCH_RETURN_RADIUS);
+                    boolean nearWorkbench = workbench != null
+                        && player.getBlockPos().getSquaredDistance(workbench) <= WORKBENCH_NEARBY_SQ;
+                    if (nearWorkbench) {
+                        // 工作台 6 格内 → IDLE 等 autoCraftStoneTools 推 wooden_pickaxe
+                        setIdle(personality, player, 5_000L);
+                        return;
+                    } else if (workbench != null) {
+                        // 工作台 6~32 格外 → 走回去
+                        set(personality, TaskType.EXPLORING, workbench);
+                        return;
+                    }
+                    // workbench == null:32 格内没有自己放过的工作台。
+                    //   背包若有 plank≥4 → autoCraftStoneTools 会触发新工作台合成 (plank≥4 + !hasTable + !workbenchNearby);
+                    //   若 plank=3(刚够 wooden_pickaxe 但不够新表),fall through 到下面砍树补料。
+                }
+
+                // 默认链路:CraftingBehavior 在 VPM tickSurvivalAndProgression 每 tick 调用,
+                // 会自动按 plank → table → stick 顺序推链(全在背包),这里只需保证原料够。
                 if (d.logEquivalent() < WOOD_LOGS_TARGET) {
                     assignChopTree(player, personality, ctx);
                 } else {
