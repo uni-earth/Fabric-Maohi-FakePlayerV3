@@ -481,6 +481,24 @@ prepareAndSpawnVirtualPlayer();
 		return blockScanCache.findNearestBlock(server, world, pos, radius, type);
 	}
 
+	/**
+	 * V5.40 多 bot 目标去重:收集除 self 外所有 bot 的 taskTarget,让 BlockScanCache 跳过这些位置。
+	 *   原因:cache key 是 8×8×8 cube,落在同 cube 的 bot(spawn 附近常见)共享同一答案 → 全砍同一棵树。
+	 *   收集开销:O(N bots) per query,N=100 时仍是微秒级,远低于一次 BlockScan。
+	 */
+	public BlockPos findNearestBlock(net.minecraft.server.world.ServerWorld world, BlockPos pos, int radius, String type, UUID self) {
+		java.util.Set<BlockPos> claimed = null;
+		for (java.util.Map.Entry<UUID, Personality> e : playerPersonalities.entrySet()) {
+			if (e.getKey().equals(self)) continue;
+			BlockPos t = e.getValue().taskTarget;
+			if (t == null) continue;
+			if (claimed == null) claimed = new java.util.HashSet<>();
+			claimed.add(t);
+		}
+		return blockScanCache.findNearestBlock(server, world, pos, radius, type,
+			claimed == null ? java.util.Collections.emptySet() : claimed);
+	}
+
     private void prepareAndSpawnVirtualPlayer() {
         PlayerSpawner.prepareAndSpawn(this);
     }
@@ -863,11 +881,12 @@ prepareAndSpawnVirtualPlayer();
         //   原值树/铁矿 20、石头 12 太短,假人在中等密度地形里大概率扫不到 → 站原地反复重扫;
         //   新值与"探索 40 格"配合:近 32 格扫不到就 EXPLORING 40 格走出去,移动后再扫一次。
         com.maohi.fakeplayer.ai.phase.PhaseContext ctx = new com.maohi.fakeplayer.ai.phase.PhaseContext(
-            (world, pos) -> findNearestBlock(world, pos, 24, "ore"),
-            (world, pos) -> findNearestBlock(world, pos, 32, "log"),
+            (world, pos) -> findNearestBlock(world, pos, 24, "ore", player.getUuid()),
+            (world, pos) -> findNearestBlock(world, pos, 32, "log", player.getUuid()),
             () -> findHuntTarget(player),
             // V5.22: PhaseStoneAge 用,优先找真石头方块,关键基础成就 mine_stone 触发
-            (world, pos) -> findNearestBlock(world, pos, 24, "stone")
+            // V5.40: 传 player UUID 让 BlockScanCache 跳过其它 bot 已 claim 的目标
+            (world, pos) -> findNearestBlock(world, pos, 24, "stone", player.getUuid())
         );
         impl.assignTask(player, personality, ctx);
         // V5.30 调试:assign 后立刻报这次决策选了什么任务/目标

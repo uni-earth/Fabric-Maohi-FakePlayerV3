@@ -222,8 +222,11 @@ public final class CraftingBehavior {
 		}
 
 		// V5.30 W2S: CRAFTING_TABLE 走背包内 2×2 合成,其它配方走工作台 3×3
-		if (target == Items.CRAFTING_TABLE) {
-			executeInInventoryCraft(player, recipe);
+		// V5.40 修复:OAK_PLANKS 也是 1×1 shapeless 配方,vanilla 真人在背包 2×2 grid 直接合,
+		// 不需要工作台。原代码漏掉这条分支,导致 bot 拿到 log 后永远 craft_fail no_workbench,
+		// 整条早期生存链卡死(永远拿不到 plank → 永远拿不到 crafting_table → 0 成就)。
+		if (target == Items.CRAFTING_TABLE || target == Items.OAK_PLANKS) {
+			executeInInventoryCraft(player, target, recipe);
 			return;
 		}
 
@@ -304,14 +307,15 @@ public final class CraftingBehavior {
 	 *   - 网格槽编号 1-4 (1,2 = top row; 3,4 = bottom row),result 在槽 0
 	 *   - 不需要 interactBlock,也不需要 closeScreen(playerScreenHandler 是 default 不可关)
 	 */
-	private static void executeInInventoryCraft(ServerPlayerEntity player, List<Placement> recipe) {
+	private static void executeInInventoryCraft(ServerPlayerEntity player, Item target, List<Placement> recipe) {
+		String targetId = net.minecraft.registry.Registries.ITEM.getId(target).getPath();
 		// 若有其它界面挡住,先关掉(让 currentScreenHandler 回到 playerScreenHandler)
 		if (player.currentScreenHandler != player.playerScreenHandler) {
 			InventoryActionHelper.closeScreen(player);
 		}
 		if (!(player.currentScreenHandler instanceof PlayerScreenHandler handler)) {
 			com.maohi.fakeplayer.TaskLogger.log(player, "craft_fail",
-				"reason", "no_player_screen", "target", "CRAFTING_TABLE_2x2");
+				"reason", "no_player_screen", "target", targetId);
 			return;
 		}
 
@@ -332,7 +336,7 @@ public final class CraftingBehavior {
 				InventoryActionHelper.quickMove(player, g);
 			}
 			com.maohi.fakeplayer.TaskLogger.log(player, "craft_fail",
-				"reason", "missing_ingredient", "target", "CRAFTING_TABLE_2x2",
+				"reason", "missing_ingredient", "target", targetId,
 				"ingredient", missing == null ? "?"
 					: net.minecraft.registry.Registries.ITEM.getId(missing).getPath());
 			return;
@@ -347,7 +351,7 @@ public final class CraftingBehavior {
 			net.minecraft.sound.SoundCategory.PLAYERS, 0.5f, 1.0f);
 
 		com.maohi.fakeplayer.TaskLogger.log(player, "craft_done",
-			"target", "CRAFTING_TABLE", "via", "inventory_2x2");
+			"target", targetId, "via", "inventory_2x2");
 	}
 
 	/** 配方原料 → 网格槽位 (网格槽编号 1..9 对应 3×3 行优先) */

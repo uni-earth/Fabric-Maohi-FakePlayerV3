@@ -4,7 +4,9 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 
+import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -41,9 +43,24 @@ public final class BlockScanCache {
 	 *   - 普通方块(stone/cobble等):保留 ±2 — 假人脚下挖矿的常态范围。
 	 */
 	public BlockPos findNearestBlock(MinecraftServer server, ServerWorld world, BlockPos pos, int radius, String type) {
+		return findNearestBlock(server, world, pos, radius, type, Collections.emptySet());
+	}
+
+	/**
+	 * V5.40 多 bot 去重:`excluded` 是其它 bot 已分配但未完成的 task target。
+	 *   原实现 cache key = 8×8×8 cube,4~5 个落在同 cube 的 bot 共享同一答案 → 全砍同一棵树 →
+	 *   挡路 / mine_start 都没触发 → 0 成就。现在 cache 命中若结果在 excluded 里就降级 scan,
+	 *   scan 步逐格跳过 excluded,保证不同 bot 拿到不同目标。
+	 */
+	public BlockPos findNearestBlock(MinecraftServer server, ServerWorld world, BlockPos pos, int radius, String type, Set<BlockPos> excluded) {
 		String cacheKey = key(pos, type);
 		Object[] cached = cache.get(cacheKey);
-		if (cached != null && System.currentTimeMillis() < (long) cached[1]) return (BlockPos) cached[0];
+		if (cached != null && System.currentTimeMillis() < (long) cached[1]) {
+			BlockPos cachedPos = (BlockPos) cached[0];
+			if (cachedPos == null || !excluded.contains(cachedPos)) return cachedPos;
+			// cache 命中的位置已被其它 bot claim → 失效该 cache,走 scan 找下一个
+			cache.remove(cacheKey);
+		}
 
 		double mspt = server.getAverageTickTime();
 		int maxRadius;
@@ -78,7 +95,7 @@ public final class BlockScanCache {
 			yMax = 2;
 		}
 
-		BlockPos result = scanShells(world, pos, radius, yMin, yMax, type);
+		BlockPos result = scanShells(world, pos, radius, yMin, yMax, type, excluded);
 		cache.put(cacheKey, new Object[]{result, System.currentTimeMillis() + CACHE_TTL_MS});
 		return result;
 	}
@@ -86,8 +103,9 @@ public final class BlockScanCache {
 	/**
 	 * 从中心向外扩散的壳层扫描——切比雪夫距离 d 的外壳扫完再扩到 d+1,
 	 * 返回真正"最近"的匹配方块,贴脸命中时 O(1)。
+	 * V5.40:`excluded` 里的 BlockPos 在扫到时直接跳过,留给下游 bot。
 	 */
-	private static BlockPos scanShells(ServerWorld world, BlockPos pos, int radius, int yMin, int yMax, String type) {
+	private static BlockPos scanShells(ServerWorld world, BlockPos pos, int radius, int yMin, int yMax, String type, Set<BlockPos> excluded) {
 		int maxD = Math.max(radius, Math.max(Math.abs(yMin), Math.abs(yMax)));
 		BlockPos.Mutable m = new BlockPos.Mutable();
 		for (int d = 0; d <= maxD; d++) {
@@ -103,6 +121,8 @@ public final class BlockScanCache {
 						// 只扫当前壳层的外皮——内部在上次迭代已扫过
 						if (Math.max(Math.abs(dx), Math.max(Math.abs(dy), Math.abs(dz))) != d) continue;
 						m.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
+						// Vec3i.hashCode/equals 基于 x/y/z,Mutable 与 immutable 在 Set 里等价
+						if (!excluded.isEmpty() && excluded.contains(m)) continue;
 						if (net.minecraft.registry.Registries.BLOCK.getId(world.getBlockState(m).getBlock()).getPath().contains(type)) {
 							return m.toImmutable();
 						}
