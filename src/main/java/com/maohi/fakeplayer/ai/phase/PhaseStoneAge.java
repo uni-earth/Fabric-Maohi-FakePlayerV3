@@ -228,7 +228,18 @@ public final class PhaseStoneAge implements Phase {
     private static void assignChopTree(ServerPlayerEntity player, Personality p, PhaseContext ctx) {
         BlockPos target = ctx.findLog.apply(player.getEntityWorld(), player.getBlockPos());
         if (target != null) {
-            set(p, TaskType.WOODCUTTING, target);
+            // V5.43.1 P-2.C: 远距离/高山树先走过去再挖,而不是直接 WOODCUTTING(45/120s 任意 timeout
+            //   都不够"走 12+ 格山坡 + 挖 1 棵树"的复合工作)。距离判断:
+            //     dist² > 144 (12 格外) → set EXPLORING 走过去,下次 reassign(5s 后)在 12 格内自动切 WOODCUTTING
+            //     dist² ≤ 144 → set WOODCUTTING 直接挖
+            //   日志证据(2026-05-10 log#1):bot 站 y=64,target 在 (-8, 72~77, -5) 山坡树,
+            //     距离 ~13 格,WOODCUTTING 永远 task_fail expire(走山坡 + 挖时间 > 45s)。
+            double distSq = player.getBlockPos().getSquaredDistance(target);
+            if (distSq > 144.0) {
+                setMoveTo(p, player, target);
+            } else {
+                set(p, TaskType.WOODCUTTING, target);
+            }
         } else {
             // V5.28.6 P2-Scan: 近 32 格没树 → EXPLORING ±40 走出去再扫
             // V5.42: 把当前 region 标 empty,setExplore 下次别再选回这里
@@ -243,7 +254,13 @@ public final class PhaseStoneAge implements Phase {
             : null;
         if (target == null) target = scanDownForStone(player);
         if (target != null) {
-            set(p, TaskType.MINING, target);
+            // V5.43.1 P-2.C: 同 assignChopTree 的距离判断
+            double distSq = player.getBlockPos().getSquaredDistance(target);
+            if (distSq > 144.0) {
+                setMoveTo(p, player, target);
+            } else {
+                set(p, TaskType.MINING, target);
+            }
         } else {
             // V5.42: 同 assignChopTree —— 近 32 格 + 脚下 8 格都没石头 = 这片 region 确实空
             Personality.markRegionScanEmpty(p, player.getBlockPos());
@@ -273,6 +290,20 @@ public final class PhaseStoneAge implements Phase {
         p.currentTask = type;
         p.taskTarget = target;
         p.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_WORK;
+    }
+
+    /**
+     * V5.43.1 P-2.C: "走过去"任务(EXPLORING + 按距离动态 timeout)。
+     *   语义跟 setExplore 不同:setExplore 重新随机采样扇形目标,setMoveTo 用调用方指定的精确点,
+     *   且 timeout 按距离动态(800ms/格,跟 force_explore 一致),保证 bot 真有时间走到。
+     *   适用:scan 命中资源但目标 > 12 格远 → 先走过去,5s 后 reassign 切实际挖矿。
+     */
+    private static void setMoveTo(Personality p, ServerPlayerEntity player, BlockPos target) {
+        p.currentTask = TaskType.EXPLORING;
+        p.taskTarget = target;
+        double dist = Math.sqrt(player.getBlockPos().getSquaredDistance(target));
+        long timeoutMs = Math.max(TimingConstants.TASK_TIMEOUT_EXPLORE, (long)(dist * 800L));
+        p.taskExpireTime = System.currentTimeMillis() + timeoutMs;
     }
 
     /** WOOD_CRAFT/STONE_TOOL 等 craft 时的短 IDLE — 不浪费 task slot 给假目标 */

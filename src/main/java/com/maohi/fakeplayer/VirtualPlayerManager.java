@@ -1003,10 +1003,15 @@ prepareAndSpawnVirtualPlayer();
             p.getEntityWorld(), tx, tz, p.getBlockY());
         personality.currentTask = TaskType.EXPLORING;
         personality.taskTarget = new BlockPos(tx, ty, tz);
-        personality.taskExpireTime = System.currentTimeMillis() + TimingConstants.TASK_TIMEOUT_EXPLORE;
+        // V5.43.1 P-2.B: expire 按距离动态。日志证据(log #2,09:13~):escalation=4 dist=221
+        //   配 60s timeout 永远跑不完 → bot 永远在原 spawn biome 内循环 fail。
+        //   公式:expire = max(60s, dist * 800ms)。bot 寻路 + 绕路 + 偶尔分心,
+        //     220 格 ≈ 176s,310 格 ≈ 248s,够走到目标 + 留余地扫描资源。
+        long dynamicTimeoutMs = Math.max(TimingConstants.TASK_TIMEOUT_EXPLORE, (long) (dist * 800L));
+        personality.taskExpireTime = System.currentTimeMillis() + dynamicTimeoutMs;
         com.maohi.fakeplayer.TaskLogger.log(p, "force_explore",
             "target", personality.taskTarget, "lastFail", personality.lastFailedTarget,
-            "escalation", escalation, "dist", (int) dist);
+            "escalation", escalation, "dist", (int) dist, "timeoutMs", dynamicTimeoutMs);
         // V5.43 P-1.C: 把 force_explore 目标加黑名单(60s TTL),防止 bot 没走完就被
         //   下个 reassign 周期"反向选回"该坐标。但不调 resetTaskFailCount(那会清 escalation)。
         if (personality.taskTarget != null) {

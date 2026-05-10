@@ -27,8 +27,13 @@ public final class TimingConstants {
 	 *     task expire 后 setExplore 重选目标 → bot 在 spawn 附近 ±20 格反复打转,永远扫不到树。
 	 *     延长到 60s 让 bot 真有机会走到目标位置后扫一次资源。 */
 	public static final long TASK_TIMEOUT_EXPLORE = 60_000L;
-	/** 工作（挖矿/砍树）任务超时 — V5.17: 10s → 45s（移动 + 实际挖一两个方块所需时间） */
-	public static final long TASK_TIMEOUT_WORK = 45_000L;
+	/** 工作（挖矿/砍树）任务超时
+	 *   V5.17: 10s → 45s（移动 + 实际挖一两个方块所需时间）
+	 *   V5.43.1 P-2.A: 45s → 120s。日志证据(2026-05-10):bot WOODCUTTING 目标常落在 12+ 格外
+	 *     山坡树(target Y=72~77,bot 在 y=64),45s 不够走山坡+挖完一棵树。120s 给寻路+爬坡+
+	 *     破坏 N 个 log block 的完整时间。配合 P-2.C 距离判断,< 12 格的近距离任务也不会
+	 *     因为这个 timeout 变长而拖慢决策周期(bot 挖完会主动 resetTaskFailCount + 进 PICKUP_DROP)。 */
+	public static final long TASK_TIMEOUT_WORK = 120_000L;
 	/** 长周期任务超时（30分钟） */
 	public static final long TASK_TIMEOUT_LONG = 1_800_000L;
 
