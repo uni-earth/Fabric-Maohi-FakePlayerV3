@@ -3,6 +3,7 @@ package com.maohi.fakeplayer.ai;
 import com.maohi.fakeplayer.Personality;
 import com.maohi.fakeplayer.TaskType;
 import com.maohi.fakeplayer.network.PacketHelper;
+import com.maohi.fakeplayer.network.InventoryActionHelper;
 import com.maohi.mixin.PlayerInventoryAccessor;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
@@ -224,9 +225,13 @@ public class BlockPlacer {
 		}
 		if (tableSlot == -1) return;
 
-		// CRAFTING_TABLE 必须在 hotbar 才能 setSelectedSlot;在背包里的话先靠 InventorySimulator
-		// 自然轮换换上来(真人也是先把工作台换到快捷栏再放),这里只在已上 hotbar 的回合放置。
-		if (tableSlot > 8) return;
+		// 工作台在背包(slot > 8)时，拟真操作：Shift+点击把它移到快捷栏，下一个 tick 再放置。
+		// 真人在放工作台前也会先把它从背包拖到快捷栏，这里完全模拟该动作序列。
+		if (tableSlot > 8) {
+			int screenSlot = InventoryActionHelper.playerInvSlotToScreenSlot(player.playerScreenHandler, tableSlot);
+			if (screenSlot >= 0) InventoryActionHelper.quickMove(player, screenSlot);
+			return; // 本 tick 只做移动，下一次 tick 检测到 hotbar 有工作台后再放置
+		}
 
 		// 找一个脚边的可放位置:北/南/东/西四面相邻一格,要求 (空气 + 下方非空气)
 		BlockPos foot = player.getBlockPos();
