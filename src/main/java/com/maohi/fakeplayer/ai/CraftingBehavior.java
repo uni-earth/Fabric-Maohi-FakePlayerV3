@@ -231,6 +231,9 @@ public final class CraftingBehavior {
 		// V5.42 修复:STICK 也是 2 plank 上下叠的 1×2 shaped 配方,2×2 grid 完全装得下。
 		// 之前只走工作台 3×3,加上 autoCraftStoneTools 的 workbenchNearby gate,
 		// 一旦 bot 走开工作台就再也合不出 stick → 木器时代死锁。
+		// V5.30 W2S: CRAFTING_TABLE, OAK_PLANKS, STICK 走背包内 2×2 合成
+		// V5.42.4 严重修复: WOODEN_PICKAXE 是 3x3 配方, 必须在工作台合。
+		//   之前把它放进背包合, 导致假人尝试把材料往【盔甲槽】里塞, 逻辑彻底崩坏。
 		if (target == Items.CRAFTING_TABLE || target == Items.OAK_PLANKS || target == Items.STICK) {
 			executeInInventoryCraft(player, target, recipe);
 			return;
