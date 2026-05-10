@@ -92,7 +92,7 @@ public final class PhaseDiamondAge implements Phase {
                 personality.currentTask = TaskType.HUNTING;
                 personality.taskTarget = huntTarget.getBlockPos();
                 personality.huntTargetUuid = huntTarget.getUuid();
-                personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_MINE;
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_MINE;
                 return;
             }
             // 没合适目标:夜晚地表 EXPLORING (末影人多在夜里地表自然刷)
@@ -133,7 +133,7 @@ public final class PhaseDiamondAge implements Phase {
                 personality.taskTarget = huntTarget.getBlockPos();
                 personality.huntTargetUuid = huntTarget.getUuid();
                 // V5.43.4: ms → tick
-                personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_MINE;
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_MINE;
                 return;
             }
             // 找不到野怪 → 地表探索
@@ -212,7 +212,7 @@ public final class PhaseDiamondAge implements Phase {
         p.currentTask = type;
         p.taskTarget = target;
         // V5.43.4: ms → tick(配 VPM reassign 切 server.getTicks())
-        p.taskExpireTime = player.getServer().getTicks() + timeoutTicks;
+        p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + timeoutTicks;
     }
 
     private static ThreadLocalRandom rng() { return ThreadLocalRandom.current(); }

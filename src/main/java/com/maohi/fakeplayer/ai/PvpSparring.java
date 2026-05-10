@@ -100,7 +100,7 @@ public class PvpSparring {
 		//   sparringStartTick/lastSparringTick 仍用 VPM totalTicks(内部 sparring 时长检查用),
 		//   两个时钟在 mspt 熔断时会发散,但各自闭环不互相比较,所以并存安全。
 		//   旧代码 `tickNow + DURATION_TICKS * 50L` 是 ticks + ms 混算 bug。
-		int serverTickNow = player.getServer().getTicks();
+		int serverTickNow = player.getEntityWorld().getServer().getTicks();
 		pPers.taskExpireTime = serverTickNow + SPARRING_MAX_DURATION_TICKS;
 
 		tPers.isSparring = true;

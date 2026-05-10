@@ -79,7 +79,7 @@ public final class AdventuringTimeTrigger implements AchievementTrigger {
 		personality.longTripTarget = far;
 		personality.taskTarget = far;
 		personality.currentTask = TaskType.EXPLORING;
-		personality.taskExpireTime = player.getServer().getTicks() + 36000; // 30min = 36000 ticks (V5.43.4 ms→tick)
+		personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 36000; // 30min = 36000 ticks (V5.43.4 ms→tick)
 		personality.lastLongTripStartedAt = System.currentTimeMillis();
 	}
 }

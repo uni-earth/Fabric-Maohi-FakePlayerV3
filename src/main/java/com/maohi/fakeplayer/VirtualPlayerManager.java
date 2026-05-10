@@ -1683,7 +1683,7 @@ prepareAndSpawnVirtualPlayer();
      *   同时 tickWorldInteraction 内加了"已拾≥1件 + 已站定"的早退条件,常态下 bot 在 1-2s
      *   内拾完就提前退出,不会真的占 10s。10s 仅作"卡顿兜底"。
      */
-    private static void enterPickupDrop(Personality personality, BlockPos minePos) {
+    private void enterPickupDrop(Personality personality, BlockPos minePos) {
         personality.currentTask = TaskType.PICKUP_DROP;
         personality.taskTarget = minePos;
         personality.taskExpireTime = server.getTicks() + TimingConstants.TICK_TIMEOUT_PICKUP + 100; // TICK_TIMEOUT_PICKUP=100(5s) + 100 buffer(5s) = 10s total

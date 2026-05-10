@@ -103,7 +103,7 @@ public final class EnchantItemTrigger implements AchievementTrigger {
 		if (distSq > INTERACT_DIST_SQ) {
 			personality.taskTarget = tablePos;
 			personality.currentTask = TaskType.EXPLORING;
-			personality.taskExpireTime = player.getServer().getTicks() + WALK_TIMEOUT_TICKS;
+			personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + WALK_TIMEOUT_TICKS;
 			return;
 		}
 

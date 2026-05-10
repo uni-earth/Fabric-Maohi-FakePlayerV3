@@ -2,6 +2,7 @@ package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.network.InventoryActionHelper;
 import com.maohi.fakeplayer.network.PacketHelper;
+import com.maohi.fakeplayer.TimingConstants;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Item;
@@ -150,7 +151,7 @@ public final class CraftingBehavior {
 		// V5.43.3 P-3.H + V5.43.4: taskExpireTime 切 server.getTicks()。buffer = 60s (1200 ticks),
 		//   总 = TICK_TIMEOUT_CRAFT(200=10s) + 1200(60s) = 1400 ticks = 70s。
 		//   原 P-3.H 修复 10s buffer 不够 → 60s buffer,这里改 tick 后仍保持 60s 语义。
-		pers.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
+		pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
 		com.maohi.fakeplayer.TaskLogger.log(player, "craft_start",
 			"target", net.minecraft.registry.Registries.ITEM.getId(target).getPath(),
 			"logs", logCount, "planks", plankCount, "sticks", stickCount, "cobble", cobbleCount,
@@ -183,7 +184,7 @@ public final class CraftingBehavior {
 				pers.craftingTarget = target;
 				pers.craftingTicks = 60 + ThreadLocalRandom.current().nextInt(40); // 3~5 秒
 				// V5.43.3 P-3.A/H + V5.43.4: 同 autoCraftStoneTools — TICK_TIMEOUT_CRAFT(10s) + 60s buffer (1200 ticks) = 70s
-				pers.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
+				pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
 				return;
 			}
 		}

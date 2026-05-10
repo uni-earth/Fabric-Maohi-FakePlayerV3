@@ -151,7 +151,7 @@ public final class PhaseEnderDragon implements Phase {
             if (distSq > 25.0) {
                 personality.currentTask = TaskType.EXPLORING;
                 personality.taskTarget = crystal.getBlockPos();
-                personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
             } else {
                 attackEndCrystal(player, personality, crystal);
             }
@@ -163,7 +163,7 @@ public final class PhaseEnderDragon implements Phase {
         if (dragonDistSq > 64.0) {
             personality.currentTask = TaskType.EXPLORING;
             personality.taskTarget = dragon.getBlockPos();
-            personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
+            personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
         } else {
             attackEnderDragon(player, personality, dragon);
         }
@@ -197,7 +197,7 @@ public final class PhaseEnderDragon implements Phase {
             if (distSq > 4.0) {
                 personality.currentTask = TaskType.EXPLORING;
                 personality.taskTarget = portalFrame;
-                personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
                 return true;
             }
             // 到了框架附近 — 看是否已激活
@@ -213,7 +213,7 @@ public final class PhaseEnderDragon implements Phase {
                 // 让假人走到传送门中心,原版传送逻辑自动触发
                 personality.currentTask = TaskType.EXPLORING;
                 personality.taskTarget = portalCenter;
-                personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
                 return true;
             }
         }
@@ -439,19 +439,19 @@ public final class PhaseEnderDragon implements Phase {
                 // V5.23: 走过去,不再 setPosition 瞬移
                 personality.currentTask = TaskType.EXPLORING;
                 personality.taskTarget = portalPos;
-                personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
             } else {
                 // 到了 portal 格上 — 让原版传送逻辑自动触发,这里只保持 IDLE 原地站
                 personality.currentTask = TaskType.IDLE;
                 personality.taskTarget = portalPos;
-                personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT;
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT;
             }
             return;
         }
         // 找不到 portal(罕见:末地主岛被破坏)— 走向 (0,65,0)
         personality.currentTask = TaskType.EXPLORING;
         personality.taskTarget = center;
-        personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
+        personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
     }
 
     // ============================================================
@@ -521,7 +521,7 @@ public final class PhaseEnderDragon implements Phase {
         p.currentTask = type;
         p.taskTarget = target;
         // V5.43.4: ms → tick(配 VPM reassign 切 server.getTicks())
-        p.taskExpireTime = player.getServer().getTicks() + timeoutTicks;
+        p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + timeoutTicks;
     }
 
     private static int rnd(int bound) { return ThreadLocalRandom.current().nextInt(bound); }

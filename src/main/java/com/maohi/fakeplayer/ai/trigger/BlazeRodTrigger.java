@@ -71,7 +71,7 @@ public final class BlazeRodTrigger implements AchievementTrigger {
 		personality.currentTask = TaskType.HUNTING;
 		personality.huntTargetUuid = target.getUuid();
 		personality.taskTarget = target.getBlockPos();
-		personality.taskExpireTime = player.getServer().getTicks() + HUNT_TIMEOUT_TICKS;
+		personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + HUNT_TIMEOUT_TICKS;
 	}
 
 	/**

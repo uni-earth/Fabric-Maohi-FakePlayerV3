@@ -335,7 +335,7 @@ public final class PhaseStoneAge implements Phase {
     private static void set(Personality p, ServerPlayerEntity player, TaskType type, BlockPos target) {
         p.currentTask = type;
         p.taskTarget = target;
-        p.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_WORK;
+        p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_WORK;
     }
 
     /**
@@ -350,14 +350,14 @@ public final class PhaseStoneAge implements Phase {
         double dist = Math.sqrt(player.getBlockPos().getSquaredDistance(target));
         // 公式: 800ms/格 ≈ 16 ticks/格
         int dynamicTimeoutTicks = Math.max(TimingConstants.TICK_TIMEOUT_EXPLORE, (int)(dist * 16));
-        p.taskExpireTime = player.getServer().getTicks() + dynamicTimeoutTicks;
+        p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + dynamicTimeoutTicks;
     }
 
     /** WOOD_CRAFT/STONE_TOOL 等 craft 时的短 IDLE — 不浪费 task slot 给假目标 */
     private static void setIdle(Personality p, ServerPlayerEntity player, int timeoutTicks) {
         p.currentTask = TaskType.IDLE;
         p.taskTarget = player.getBlockPos();
-        p.taskExpireTime = player.getServer().getTicks() + timeoutTicks;
+        p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + timeoutTicks;
     }
 
     /**
@@ -415,6 +415,6 @@ public final class PhaseStoneAge implements Phase {
         int ty = player.getBlockY();
         p.currentTask = TaskType.EXPLORING;
         p.taskTarget = new BlockPos(tx, ty, tz);
-        p.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
+        p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
     }
 }

@@ -122,7 +122,7 @@ public final class PhaseNether implements Phase {
                 personality.currentTask = TaskType.HUNTING;
                 personality.taskTarget = huntTarget.getBlockPos();
                 personality.huntTargetUuid = huntTarget.getUuid();
-                personality.taskExpireTime = player.getServer().getTicks() + 900; // 45s = 900 ticks
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 900; // 45s = 900 ticks
                 return;
             }
             // 找不到下界生物 — 大概率玩家在远离要塞的下界荒地,主动远征找要塞
@@ -214,7 +214,7 @@ public final class PhaseNether implements Phase {
             if (distSq > 4.0) {
                 personality.currentTask = TaskType.EXPLORING;
                 personality.taskTarget = portalPos;
-                personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
                 return true;
             }
             interactPortal(player, portalPos);
@@ -230,7 +230,7 @@ public final class PhaseNether implements Phase {
                 if (distSq > 4.0) {
                     personality.currentTask = TaskType.EXPLORING;
                     personality.taskTarget = buildPos;
-                    personality.taskExpireTime = player.getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
+                    personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
                     return true;
                 }
                 buildPortal(player, buildPos);
@@ -598,6 +598,6 @@ public final class PhaseNether implements Phase {
         p.currentTask = type;
         p.taskTarget = target;
         // V5.43.4: ms → tick(配 VPM reassign 切 server.getTicks())
-        p.taskExpireTime = player.getServer().getTicks() + timeoutTicks;
+        p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + timeoutTicks;
     }
 }
