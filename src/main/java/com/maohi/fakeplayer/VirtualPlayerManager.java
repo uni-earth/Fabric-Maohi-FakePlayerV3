@@ -1020,9 +1020,9 @@ prepareAndSpawnVirtualPlayer();
     /**
      * V5.43 P-1.D: vanilla "结构性无树" biome 黑名单。bot 站在这些 biome 内时,无论怎么扫
      *   半径都不会有树,force_explore 必须直接跳级到大半径。
-     *   不在此列(有树/可能有树):forest/taiga/jungle/savanna/dark_forest/cherry_grove/
-     *     plains/sunflower_plains/wooded_badlands/sparse_jungle/old_growth_*/swamp/
-     *     mangrove_swamp/meadow/grove/snowy_taiga/birch_forest 等。
+     *   不在此列(有树/可能有树):forest, taiga, jungle, savanna, dark_forest, cherry_grove,
+     *     plains, sunflower_plains, wooded_badlands, sparse_jungle, old_growth_*, swamp,
+     *     mangrove_swamp, meadow, grove, snowy_taiga, birch_forest 等等。
      *   保守原则:不确定的 biome 不入黑名单,让 P-1.C 阶梯爬就行。
      */
     private static final java.util.Set<String> TREELESS_BIOME_IDS = java.util.Set.of(
