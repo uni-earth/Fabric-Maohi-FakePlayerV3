@@ -228,12 +228,17 @@ public final class PhaseStoneAge implements Phase {
     private static void assignChopTree(ServerPlayerEntity player, Personality p, PhaseContext ctx) {
         BlockPos target = ctx.findLog.apply(player.getEntityWorld(), player.getBlockPos());
         if (target != null) {
+            // V5.43.2 P-2.D: BlockScanCache.scanShells 切比雪夫扩散经常先命中树梢 log(y_top)
+            //   而不是树根 log(y_base)。bot 走到树底站平地,到树梢 log 距离 5+ 格,
+            //   vanilla reach 4.5 格够不着,120s WOODCUTTING 站着挖不到 → 4 次 fail。
+            //   修复:命中后向下扫连续 log,锁定最低位(树根),bot 挖地表 log 而非空中。
+            //   日志证据(2026-05-10 log):5 个 bot 全盯 (11, 76~79, -2),Starforged48 距离 9 格,
+            //     4 次 120s WOODCUTTING 全 fail —— 经典"挖不到树顶"指纹。
+            target = snapToTreeBase(player.getEntityWorld(), target);
             // V5.43.1 P-2.C: 远距离/高山树先走过去再挖,而不是直接 WOODCUTTING(45/120s 任意 timeout
             //   都不够"走 12+ 格山坡 + 挖 1 棵树"的复合工作)。距离判断:
             //     dist² > 144 (12 格外) → set EXPLORING 走过去,下次 reassign(5s 后)在 12 格内自动切 WOODCUTTING
             //     dist² ≤ 144 → set WOODCUTTING 直接挖
-            //   日志证据(2026-05-10 log#1):bot 站 y=64,target 在 (-8, 72~77, -5) 山坡树,
-            //     距离 ~13 格,WOODCUTTING 永远 task_fail expire(走山坡 + 挖时间 > 45s)。
             double distSq = player.getBlockPos().getSquaredDistance(target);
             if (distSq > 144.0) {
                 setMoveTo(p, player, target);
@@ -284,6 +289,27 @@ public final class PhaseStoneAge implements Phase {
             }
         }
         return null;
+    }
+
+    /**
+     * V5.43.2 P-2.D: 把"任意 log 候选"向下吸附到树根。
+     *   BlockScanCache.scanShells 切比雪夫扩散经常先命中树梢 log(顶部),bot 走到树底
+     *   后到那个 log 还有 5+ 格垂直距离 > vanilla reach 4.5 格 → 永远挖不到。
+     *   实现:沿 -Y 方向连续扫,只要下一格还是 log/wood 就继续下沉,遇到非 log 停止。
+     *   最多下沉 16 格(够覆盖 vanilla 最高 jungle 树),防止异常方块结构卡死循环。
+     */
+    private static BlockPos snapToTreeBase(ServerWorld world, BlockPos topLog) {
+        BlockPos cur = topLog;
+        for (int i = 0; i < 16; i++) {
+            BlockPos below = cur.down();
+            String id = Registries.BLOCK.getId(world.getBlockState(below).getBlock()).getPath();
+            if (id.contains("log") || id.contains("wood")) {
+                cur = below;
+            } else {
+                break;
+            }
+        }
+        return cur;
     }
 
     private static void set(Personality p, TaskType type, BlockPos target) {
