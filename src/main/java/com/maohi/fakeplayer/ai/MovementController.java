@@ -458,9 +458,10 @@ public class MovementController {
 		pers.lastStuckSampleZ = pos.z;
 		pers.lastStuckSampleY = pos.y;
 
-		// P2: 静态任务豁免 stuck 判定。正在合成、或正在执行方块摆放状态机时，物理位移必然为 0，
-		//     不应累加 stuckTicks，防止被误判卡死而踢出。
+		// P2 & P7: 静态任务豁免 stuck 判定。正在合成、挖矿、或执行方块摆放状态机时，物理位移必然为 0，
+		//     不应累加 stuckTicks，防止在极度卡顿环境下（挖一棵树耗时30秒以上）被误判卡死踢出。
 		if (pers.currentTask == com.maohi.fakeplayer.TaskType.CRAFTING
+			|| pers.isMining
 			|| pers.tablePlaceStage > 0
 			|| pers.furnacePlaceStage > 0
 			|| pers.torchPlaceStage > 0) {

@@ -141,7 +141,17 @@ public class BlockPlacer {
 				blockUnder,
 				false
 			);
+			// P8: 双保险 - 第一步：发包模拟（满足协议监听）
 			PacketHelper.interactBlock(player, Hand.MAIN_HAND, hit);
+
+			// P8: 双保险 - 第二步：检查发包结果，如果服务器卡顿丢弃了包，立刻用直接调用补刀
+			BlockPos placeAt = blockUnder.up();
+			net.minecraft.block.BlockState afterState = player.getEntityWorld().getBlockState(placeAt);
+			if (!afterState.isOf(net.minecraft.block.Blocks.TORCH) && !afterState.isOf(net.minecraft.block.Blocks.WALL_TORCH)) {
+				ItemStack handStack = player.getStackInHand(Hand.MAIN_HAND);
+				player.interactionManager.interactBlock(player, player.getEntityWorld(), handStack, Hand.MAIN_HAND, hit);
+			}
+
 			PacketHelper.swingHand(player, Hand.MAIN_HAND);
 
 			personality.torchRestoreAtTick = now + RESTORE_DELAY_MIN
@@ -351,16 +361,19 @@ public class BlockPlacer {
 			PacketHelper.setSelectedSlot(player, personality.tableTargetSlot);
 			BlockHitResult hit = new BlockHitResult(hitCenter, face, support, false);
 
-			// P5 诊断：绕过网络包，直接调用 interactionManager 确认放置结果。
-			//   如果 interactionManager 返回 SUCCESS 但方块没出现 → 后续有东西撤销了放置。
-			//   如果 interactionManager 返回 FAIL/PASS → 放置本身被服务器拒绝，需看具体原因。
-			ItemStack handStack = player.getStackInHand(Hand.MAIN_HAND);
-			net.minecraft.util.ActionResult result = player.interactionManager.interactBlock(
-				player, player.getEntityWorld(), handStack, Hand.MAIN_HAND, hit);
-			PacketHelper.swingHand(player, Hand.MAIN_HAND);
+			// P8: 双保险 - 第一步：发包模拟（满足协议监听）
+			PacketHelper.interactBlock(player, Hand.MAIN_HAND, hit);
 
-			// 诊断：检查放置后目标位置的方块状态
+			// P8: 双保险 - 第二步：检查发包结果，如果服务器卡顿丢弃了包，立刻用直接调用补刀
 			net.minecraft.block.BlockState afterState = player.getEntityWorld().getBlockState(placeAt);
+			net.minecraft.util.ActionResult result = net.minecraft.util.ActionResult.PASS;
+			ItemStack handStack = player.getStackInHand(Hand.MAIN_HAND);
+			if (!afterState.isOf(net.minecraft.block.Blocks.CRAFTING_TABLE)) {
+				result = player.interactionManager.interactBlock(player, player.getEntityWorld(), handStack, Hand.MAIN_HAND, hit);
+				afterState = player.getEntityWorld().getBlockState(placeAt);
+			}
+
+			PacketHelper.swingHand(player, Hand.MAIN_HAND);
 			com.maohi.fakeplayer.TaskLogger.log(player, "table_place_sent",
 				"pos", placeAt, "support", support,
 				"result", result.toString(),
@@ -543,7 +556,17 @@ public class BlockPlacer {
 			// P0: 重发 setSelectedSlot 防止槽位漂移(同 table 修复)。
 			PacketHelper.setSelectedSlot(player, personality.furnaceTargetSlot);
 			BlockHitResult hit = new BlockHitResult(hitCenter, face, support, false);
+
+			// P8: 双保险 - 第一步：发包模拟（满足协议监听）
 			PacketHelper.interactBlock(player, Hand.MAIN_HAND, hit);
+
+			// P8: 双保险 - 第二步：检查发包结果，如果服务器卡顿丢弃了包，立刻用直接调用补刀
+			net.minecraft.block.BlockState afterState = player.getEntityWorld().getBlockState(placeAt);
+			if (!afterState.isOf(net.minecraft.block.Blocks.FURNACE)) {
+				ItemStack handStack = player.getStackInHand(Hand.MAIN_HAND);
+				player.interactionManager.interactBlock(player, player.getEntityWorld(), handStack, Hand.MAIN_HAND, hit);
+			}
+
 			PacketHelper.swingHand(player, Hand.MAIN_HAND);
 
 			personality.furnaceRestoreAtTick = now + RESTORE_DELAY_MIN
