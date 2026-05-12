@@ -75,6 +75,12 @@ public class VirtualPlayerManager {
     public void start() {
         if (running) return;
         running = true;
+        // P14: 启动后 30s 内不 spawn 第一个 bot,避免与 server 自己的世界 / 实体 / chunk init
+        //   在 main thread 撞车,导致 "Can't keep up!" lag spike (8s+ / 171 ticks behind)。
+        //   日志证据:server 启动 → 2~4s 后第一个 bot spawn → 立刻 171 ticks behind。
+        //   nextJoinTime 默认 = 0,manageLoop 第一个 logicTickCounter==20 (≈1s) 就 fire spawn。
+        //   30s 给 vanilla 完成 spawn 区域加载 + 各 phase init 的 quiet window。
+        nextJoinTime = System.currentTimeMillis() + 30_000L;
         // planA B-4: 清空 BlockScanCache,确保新会话不被上次跑测的 30s TTL 残留坐标污染。
         //   重启 / 热加载 / 单服 /tps reset 等场景 instance 不一定重建,显式清一次保险。
         blockScanCache.clearAll();
