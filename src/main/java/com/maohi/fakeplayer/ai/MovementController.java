@@ -479,8 +479,8 @@ public class MovementController {
 		}
 		pers.stuckTicks++;
 
-		// === stage 1: > 120 tick (6s) 未动 → 拉黑 target 触发 reassign ===
-		if (pers.stuckTicks > 120 && pers.stuckEscalation < 1) {
+		// === stage 1: > 300 tick (15s) 未动 → 拉黑 target 触发 reassign ===
+		if (pers.stuckTicks > 300 && pers.stuckEscalation < 1) {
 			pers.stuckEscalation = 1;
 			if (target != null) {
 				pers.failedTargets.put(target, System.currentTimeMillis() + 60_000L);

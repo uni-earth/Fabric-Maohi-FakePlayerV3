@@ -10,10 +10,16 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
-import java.util.concurrent.atomic.AtomicInteger;
-
 /**
  * 全链路发包工具类 (V3)
+ *
+ * planA P-3 sequence-counter fix:
+ *   旧实现 static AtomicInteger sequenceCounter,所有 fake player 共用一个自增器 →
+ *   多 bot 同 tick 发包 sequence 抢占跳号 → vanilla server 按 per-player 跟踪期望序列,
+ *   收到跳号包 silently drop。日志现象:多 bot 场景下 craft_done 后 table_place_sent
+ *   反复重发 10+ 次但工作台永远没真正落地,bot 卡 stuck_kick 循环。
+ *   现在 sequence 从 Personality.sequenceCounter 取,per-player 独立计数,server-side 期望
+ *   完全对齐,placement / mine / interact 包不再被静默丢。
  */
 @SuppressWarnings("deprecation")
 public class PacketHelper {

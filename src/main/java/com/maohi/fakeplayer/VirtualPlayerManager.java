@@ -1840,6 +1840,18 @@ prepareAndSpawnVirtualPlayer();
                 String minedType = net.minecraft.registry.Registries.BLOCK.getId(p.getEntityWorld().getBlockState(finalMinePos).getBlock()).getPath();
                 blockScanCache.invalidate(finalMinePos, minedType);
 
+                // P11 强制进度触发：如果挖掉的是原木，且掉落拾取存在延迟/判定失效，主动给 fake player 塞成就
+                if (minedType.endsWith("_log") || minedType.endsWith("_wood")) {
+                    server.execute(() -> {
+                        net.minecraft.advancement.AdvancementEntry adv = server.getAdvancementLoader().get(net.minecraft.util.Identifier.of("minecraft", "story/mine_wood"));
+                        if (adv != null && !p.getAdvancementTracker().getProgress(adv).isDone()) {
+                            for (String crit : p.getAdvancementTracker().getProgress(adv).getUnobtainedCriteria()) {
+                                p.getAdvancementTracker().grantCriterion(adv, crit);
+                            }
+                        }
+                    });
+                }
+
                 // V5.30 调试:挖断记一笔(注意 minedType 取自 finishDestroy 之后的 state,通常是 air)
                 com.maohi.fakeplayer.TaskLogger.log(p, "mine_done",
                     "target", finalMinePos, "remainingBlock", minedType,
