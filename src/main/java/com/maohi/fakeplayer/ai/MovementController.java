@@ -549,7 +549,19 @@ public class MovementController {
 					stopMovement(p);
 					return true;
 				}
-				// teleport 条件不满足(已无路可走的真死局)→ 不前进 escalation,等下 tick 重试或等观察者离开
+				// P21-b: surfaceY ≤ blockY+2 → bot 已经在地表(or 浮空),teleport 救不回。
+				//   日志证据: WardenWatcher38 卡 (33,66,22) 4 分钟,surface 跟 blockY 差不多 →
+				//   stage 2 永远进不去 teleport 分支 → stage 3 也累不到 1200(每 5s assign 1 次,
+				//   stuckTicks 累得极慢)。配合 P21-a 的 blocked_no_path += 200,5 次 fail 累到 600
+				//   触发 stage 2,这里 fallback 立刻推 stage 3。stage 2 入口已通过 cooldownOk +
+				//   无 observer 检查,kick 安全。
+				pers.stuckEscalation = 2;
+				pers.stuckTicks = 1199;
+				com.maohi.fakeplayer.TaskLogger.log(p, "stuck_no_surface",
+					"from_y", String.format("%.1f", pos.y),
+					"surface_y", surfaceY == Integer.MIN_VALUE ? "n/a" : String.valueOf(surfaceY));
+				stopMovement(p);
+				return true;
 			}
 		}
 
@@ -565,11 +577,15 @@ public class MovementController {
 			//   personality 与 knownPlayers[uuid].personality 同一引用,清字段后 saveData() 序列化
 			//   就是 null;saved=true 重连时 loadPlayerData 装回的 Gson 状态也是 null,新会话从
 			//   detectPhase → assignRandomTask 干净起步。
+			// P20 B-bis: 一并调 resetTaskFailCount 清 taskFailCount / lastFailedTarget /
+			//   failedTargets / forceExploreEscalation,彻底"白纸"重启。原 commit (P20 第一版)
+			//   只清 failedTargets 没清前三者,日志证据: Jordan_2009 重连后 assign fails=2 残留,
+			//   只要再 fail 2 次就直接 force_explore — 不该是干净重连应有的行为。
+			com.maohi.fakeplayer.Personality.resetTaskFailCount(pers);
 			pers.currentTask = com.maohi.fakeplayer.TaskType.IDLE;
 			pers.taskTarget = null;
 			pers.pathWaypoint = null;
 			pers.currentPath.clear();
-			pers.failedTargets.clear();
 			com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
 			if (mgr != null) {
 				// 走 VPM 的优雅 kick 路径(走真实 disconnect 包),VPM 补位机制后续会重 spawn。

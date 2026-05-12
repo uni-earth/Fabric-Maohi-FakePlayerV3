@@ -272,6 +272,13 @@ public class VirtualPlayerManager {
                                             "target", snapshotTarget);
                                         com.maohi.fakeplayer.TaskMetrics.countTaskFail(p.getUuid(), "blocked_no_path");
                                         Personality.recordTaskFailure(personality, snapshotTarget);
+                                        // P21-a: blocked_no_path 后立刻 IDLE → 下个 manageLoop tick
+                                        //   该 bot 不再入队 doSmartMove → stuckTicks 累得极慢(5s/tick),
+                                        //   stage 1→2 要 25 min。日志证据: WardenWatcher38 卡 (33,66,22)
+                                        //   连续 4 分钟 blocked_no_path 但 stuck_kick 始终不触发。
+                                        //   每次 blocked 累 +200,3 次累到 stage 1(300),5 次到 stage 2(600+),
+                                        //   配合 P21-b 的 stage 2 fallback 立即 kick → 整体 ~25s 内 kick。
+                                        personality.stuckTicks += 200;
                                         personality.currentTask = TaskType.IDLE;
                                         personality.taskTarget = null;
                                     }
