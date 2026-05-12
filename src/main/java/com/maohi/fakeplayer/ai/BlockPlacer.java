@@ -339,8 +339,6 @@ public class BlockPlacer {
 			// P11 强制清场：如果是可替换方块（如 leaf_litter, tall_grass），直接强拆
 			if (!placeAtState.isAir() && placeAtState.isReplaceable()) {
 				player.getEntityWorld().breakBlock(placeAt, true, player);
-				// 拆完后再更新一下 state，防止干扰后续判定
-				placeAtState = player.getEntityWorld().getBlockState(placeAt);
 			}
 
 			// 槽位仍要有 CRAFTING_TABLE

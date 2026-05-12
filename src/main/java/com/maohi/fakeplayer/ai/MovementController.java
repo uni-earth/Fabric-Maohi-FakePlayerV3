@@ -431,12 +431,12 @@ public class MovementController {
 	 *   重置 escalation 让 bot 下次卡死时重新走完整阶梯)。
 	 *
 	 * 阶梯触发(escalation 状态机,只前进不回退,避免抖动):
-	 *   stage 0 → stage 1 (stuckTicks > 60, ~3s @20Hz):
+	 *   stage 0 → stage 1 (stuckTicks > 300, ~15s @20Hz):
 	 *       拉黑当前 taskTarget + 设置 task=IDLE → VPM 下次 reassign 给新目标
-	 *   stage 1 → stage 2 (stuckTicks > 200, ~10s):
+	 *   stage 1 → stage 2 (stuckTicks > 600, ~30s):
 	 *       附近 32 格无真人玩家 + 10 分钟内未 teleport 过 → 抬升 bot 到当前 xz 的 heightmap
 	 *       surface y(走出 cave)。视线遮蔽保证玩家看不到"瞬移",画像 = "bot 进洞后又走出来"。
-	 *   stage 2 → stage 3 (stuckTicks > 600, ~30s,有玩家观察导致 teleport 被禁):
+	 *   stage 2 → stage 3 (stuckTicks > 1200, ~60s,有玩家观察导致 teleport 被禁):
 	 *       仍然有玩家围观但 bot 完全无法脱困 → kick(disconnect),VPM 后续会按正常补位机制重 spawn,
 	 *       新 spawn 路径经 B-1 强化的 pickScatteredSpawn 不会再掉同一个 cave。
 	 *
@@ -496,8 +496,8 @@ public class MovementController {
 			return true;
 		}
 
-		// === stage 2: > 400 tick (20s) 未动 → 无观察者时 teleport 到 surface ===
-		if (pers.stuckTicks > 400 && pers.stuckEscalation < 2) {
+		// === stage 2: > 600 tick (30s) 未动 → 无观察者时 teleport 到 surface ===
+		if (pers.stuckTicks > 600 && pers.stuckEscalation < 2) {
 			long nowMs = System.currentTimeMillis();
 			boolean cooldownOk = nowMs - pers.lastStuckTeleportAt > 10 * 60_000L;
 			if (cooldownOk && !hasNearbyRealObserver(p, world, 32)) {

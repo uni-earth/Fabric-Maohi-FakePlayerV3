@@ -377,32 +377,52 @@ public final class PhaseStoneAge implements Phase {
     private static void setExplore(Personality p, ServerPlayerEntity player) {
         Personality.pruneScannedEmptyRegions(p);
         ThreadLocalRandom rng = ThreadLocalRandom.current();
-        int tx = player.getBlockX(); // fallback,理论上不会用到
-        int tz = player.getBlockZ();
-        final int MAX_ATTEMPTS = 5;
+        int bestTx = player.getBlockX();
+        int bestTz = player.getBlockZ();
+        boolean found = false;
+        final int MAX_ATTEMPTS = 10; // 增加尝试次数
+        
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             float angleSpan = (attempt < 3) ? 120f : 360f;
             float offsetDeg = rng.nextFloat() * angleSpan - angleSpan / 2f;
             double rad = Math.toRadians(player.getYaw() + offsetDeg);
-            double dist = EXPLORE_RADIUS * (0.85 + rng.nextDouble() * 0.15); // 0.85~1.0 半径,贴外圈
+            
+            // 后续尝试扩大搜索半径，强迫走出空旷地带
+            double multiplier = 1.0 + (attempt / 3) * 0.5;
+            double dist = EXPLORE_RADIUS * multiplier * (0.85 + rng.nextDouble() * 0.15); // 0.85~1.0 半径,贴外圈
+            
             int dx = (int) Math.round(-Math.sin(rad) * dist);
             int dz = (int) Math.round(Math.cos(rad) * dist);
-            tx = player.getBlockX() + dx;
-            tz = player.getBlockZ() + dz;
+            int tx = player.getBlockX() + dx;
+            int tz = player.getBlockZ() + dz;
             int rx = Personality.blockToRegion(tx);
             int rz = Personality.blockToRegion(tz);
+            
             if (Personality.isRegionScanEmpty(p, rx, rz)) continue;
+            
             // V5.43.3 P-3.E: 朝 target 第一格如果是真 danger (落差/岩浆/火),换方向。
-            //   深水已不算 danger (P-3.D),所以不会过度排除水方向,bot 仍可选水方向游过去。
-            //   节省 60s task timeout 等待: 旧行为 bot 朝悬崖走 → stopMovement → 站着等过期。
-            //   新行为 setExplore 在采样阶段就排除明显走不通的方向,失败时 retry 找其它方向。
             int sdx = Integer.signum(dx);
             int sdz = Integer.signum(dz);
             BlockPos firstStep = player.getBlockPos().add(sdx, 0, sdz);
             if (com.maohi.fakeplayer.ai.PathfindingNavigation.isDangerAhead(
                     player.getEntityWorld(), firstStep)) continue;
+                    
+            bestTx = tx;
+            bestTz = tz;
+            found = true;
             break;
         }
+        
+        if (!found) {
+            // 兜底：如果所有方向都是 empty region 或 danger，强制往一个大半径随机方向走，打破死循环
+            double rad = rng.nextDouble() * Math.PI * 2;
+            double dist = EXPLORE_RADIUS * 2.0;
+            bestTx = player.getBlockX() + (int) Math.round(-Math.sin(rad) * dist);
+            bestTz = player.getBlockZ() + (int) Math.round(Math.cos(rad) * dist);
+        }
+        
+        int tx = bestTx;
+        int tz = bestTz;
         // V5.43.3 P-3.I: target.y 直接用 bot.y, 而非 getSafeTopY(surface)。
         //   背景: 旧实现 ty=getSafeTopY(...) 在平原/海面世界返回 y=63。但 bot 可能 spawn 在山顶 y=84/93/95
         //     (chunk gen 在山地/丘陵地形落点)。bot 朝 (tx, 63, tz) 走,doSmartMove 用 xz 到达判定

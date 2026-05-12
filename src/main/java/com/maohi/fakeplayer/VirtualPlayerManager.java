@@ -1852,7 +1852,7 @@ prepareAndSpawnVirtualPlayer();
                     });
                 }
 
-                // V5.30 调试:挖断记一笔(注意 minedType 取自 finishDestroy 之后的 state,通常是 air)
+                // V5.30 调试:挖断记一笔(注意 minedType 取自 finishDestroy 发包前，因此是实际破坏的方块名)
                 com.maohi.fakeplayer.TaskLogger.log(p, "mine_done",
                     "target", finalMinePos, "remainingBlock", minedType,
                     "totalMined", personality.blocksMinedTotal + 1);
