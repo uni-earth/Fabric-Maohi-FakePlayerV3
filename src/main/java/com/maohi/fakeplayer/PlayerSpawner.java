@@ -98,7 +98,16 @@ public class PlayerSpawner {
             }
         }
 	// 1.21.11 适配：使用 SyncedClientOptions
-	net.minecraft.network.packet.c2s.common.SyncedClientOptions clientInfo = net.minecraft.network.packet.c2s.common.SyncedClientOptions.createDefault();
+	// P16: 把 viewDistance 强制设 2(默认为 server max,通常 10)。
+	//   onPlayerConnect 内 vanilla 会按 viewDistance² 给 player 注册 chunk ticket
+	//   (10 = 21×21 = 441 chunks; 2 = 5×5 = 25 chunks),main thread 工作量降 17 倍。
+	//   日志证据:P15(关同步 chunk loading)后单次 spawn 仍 6537ms / 130 ticks behind,
+	//   排除 chunk serialize(FakeClientConnection.send 不调 super 直接吃掉)后,
+	//   最大嫌疑就是 ChunkLoadingManager 的 ticket 注册 + chunk-level 计算 O(N) 工作量。
+	//   fake player 不需要看周围环境(senseEnvironment / pathfinding 都是 server-side
+	//   getBlockState,不依赖 viewDistance),viewDistance=2 是安全下限。
+	//   反射重建避免依赖字段名常量在不同 yarn build 间的差异。
+	net.minecraft.network.packet.c2s.common.SyncedClientOptions clientInfo = buildSyncedClientOptions(2);
 	net.minecraft.server.world.ServerWorld overworld = server.getOverworld();
 	ServerPlayerEntity player = new ServerPlayerEntity(server, overworld, profile, clientInfo);
 
@@ -379,5 +388,40 @@ public class PlayerSpawner {
             }
         }
         return solidBelow >= 2;
+    }
+
+    /**
+     * P16: 反射构造 SyncedClientOptions,强制 viewDistance = customViewDistance。
+     *   1.21.11 yarn SyncedClientOptions 是个 record,字段顺序固定但字段名可能跨 yarn build
+     *   微调。用 RecordComponent reflection 重建,只覆盖 int 型且名为 viewDistance/view_distance
+     *   的字段,其他字段值从 createDefault() 拷贝过来,保持兼容。
+     *   失败时 fallback 到 createDefault(),不阻塞 spawn(只是失去 view distance 优化收益)。
+     */
+    private static net.minecraft.network.packet.c2s.common.SyncedClientOptions buildSyncedClientOptions(int customViewDistance) {
+        net.minecraft.network.packet.c2s.common.SyncedClientOptions def =
+            net.minecraft.network.packet.c2s.common.SyncedClientOptions.createDefault();
+        try {
+            java.lang.reflect.RecordComponent[] components =
+                net.minecraft.network.packet.c2s.common.SyncedClientOptions.class.getRecordComponents();
+            if (components == null) return def; // 不是 record(yarn 旧版本) → 安全 fallback
+            Class<?>[] paramTypes = new Class<?>[components.length];
+            Object[] paramValues = new Object[components.length];
+            for (int i = 0; i < components.length; i++) {
+                paramTypes[i] = components[i].getType();
+                paramValues[i] = components[i].getAccessor().invoke(def);
+                // 命中 viewDistance 字段(int 型 + 名字匹配)→ 覆盖
+                String n = components[i].getName().toLowerCase();
+                if (paramTypes[i] == int.class && (n.contains("view") && n.contains("distance"))) {
+                    paramValues[i] = customViewDistance;
+                }
+            }
+            return net.minecraft.network.packet.c2s.common.SyncedClientOptions.class
+                .getDeclaredConstructor(paramTypes).newInstance(paramValues);
+        } catch (Throwable t) {
+            org.slf4j.LoggerFactory.getLogger("Server thread").warn(
+                "[MaohiTask] buildSyncedClientOptions reflection failed, falling back to createDefault: {}",
+                t.toString());
+            return def;
+        }
     }
 }
