@@ -72,6 +72,12 @@ public class PlayerSpawner {
      *     构造器统一传 overworld 即可
      */
     public static void spawn(VirtualPlayerManager manager, String name, SkinService.SkinProperty skin) {
+        // P18: spawn 流程 timing 诊断。日志显示 spawn 后单 tick 卡 7~13s 触发 Can't keep up,
+        //   P14/P15/P16 修完 grace period + 同步 chunk loading + viewDistance=2 后仍卡,
+        //   剩余瓶颈必在 vanilla onPlayerConnect 内某个未识别同步操作(可能是 sendCommandTree /
+        //   sendRecipes / sync advancements / placeNewPlayer 内的 chunk view init)。
+        //   加 nanoTime 把每个阶段耗时 log 出来,跑一次就能定位是哪一步。
+        long t0 = System.nanoTime();
         MinecraftServer server = manager.getServer();
         UUID uuid = manager.getNameToUuidIndex().getOrDefault(name, UUID.randomUUID());
         if (server.getPlayerManager().getPlayer(uuid) != null) return; // already online, skip
@@ -109,7 +115,9 @@ public class PlayerSpawner {
 	//   反射重建避免依赖字段名常量在不同 yarn build 间的差异。
 	net.minecraft.network.packet.c2s.common.SyncedClientOptions clientInfo = buildSyncedClientOptions(2);
 	net.minecraft.server.world.ServerWorld overworld = server.getOverworld();
+	long t1 = System.nanoTime();
 	ServerPlayerEntity player = new ServerPlayerEntity(server, overworld, profile, clientInfo);
+	long t2 = System.nanoTime();
 
 	// V5.37: 1.21.11 vanilla ServerPlayerEntity 构造器不再把新实体放到 world.getSpawnPos()。
 	//   真人客户端走 ConfigurationState→PlayState 转换时由 PlayerManager 的内部流程 + 客户端
@@ -146,10 +154,12 @@ public class PlayerSpawner {
 	}
 
 	ClientConnection conn = new FakeClientConnection();
+	long t3 = System.nanoTime();
 	// 1.21.11 适配：使用静态工厂方法创建进服数据
 	// vanilla onPlayerConnect → loadPlayerData → 若 <uuid>.dat 存在则按 NBT 中
 	// Dimension/Pos/Inventory 等还原(等同真回归玩家);否则沿用上面预设的 world spawn。
 	server.getPlayerManager().onPlayerConnect(conn, player, net.minecraft.server.network.ConnectedClientData.createDefault(profile, false));
+	long t4 = System.nanoTime();
 	
 	// V5.28.5 P1-E.1: 删除登录瞬间硬塞 latency 的直写——
 	//   旧实现 maohi$setLatency(40+rand(140)) 让假人一上线 ping 就有值,
@@ -201,11 +211,23 @@ public class PlayerSpawner {
         
         // 设置为生存模式
         player.changeGameMode(net.minecraft.world.GameMode.SURVIVAL);
-        
+
         // 移除 player.setInvulnerable(true); 以修复物理破绽！
 
         // 注册到管理器
         manager.registerSpawnedPlayer(player, conn, name, saved);
+
+        // P18: spawn 各阶段耗时诊断
+        long t5 = System.nanoTime();
+        org.slf4j.LoggerFactory.getLogger("Server thread").info(
+            "[MaohiTask] [{}] spawn_timing total={}ms pre={}ms entityCtor={}ms pickPos={}ms onPlayerConnect={}ms postInit={}ms",
+            name,
+            (t5 - t0) / 1_000_000,
+            (t1 - t0) / 1_000_000,
+            (t2 - t1) / 1_000_000,
+            (t3 - t2) / 1_000_000,
+            (t4 - t3) / 1_000_000,
+            (t5 - t4) / 1_000_000);
     }
 
     /**
