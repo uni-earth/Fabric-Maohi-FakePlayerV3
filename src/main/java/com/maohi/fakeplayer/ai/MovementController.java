@@ -517,7 +517,7 @@ public class MovementController {
 					com.maohi.fakeplayer.TaskLogger.log(p, "stuck_teleport",
 						"from_y", String.format("%.1f", pos.y),
 						"to_y", String.format("%.1f", newY),
-						"stuckTicks", 400);
+						"stuckTicks", pers.stuckTicks);
 					stopMovement(p);
 					return true;
 				}
