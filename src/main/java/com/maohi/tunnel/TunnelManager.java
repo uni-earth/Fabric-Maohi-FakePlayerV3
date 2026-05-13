@@ -377,7 +377,7 @@ public class TunnelManager {
                 "   \"users\": [{\"uuid\": \"" + config().nodeUuid + "\"}],\n" +
                 "   \"transport\": {\n" +
                 "     \"type\": \"ws\",\n" +
-                "     \"path\": \"/vless-argo\",\n" +
+                "     \"path\": \"/player-join\",\n" +
                 "     \"max_early_data\": 2560,\n" +
                 "     \"early_data_header_name\": \"Sec-WebSocket-Protocol\"\n" +
                 "   }\n" +
@@ -572,7 +572,7 @@ public class TunnelManager {
         if (isValidPort(config().argoPort) && argoDomain != null && !argoDomain.isEmpty()) {
             String params = "encryption=none&security=tls&sni=" + argoDomain +
                 "&fp=firefox&type=ws&host=" + argoDomain +
-                "&path=%2Fvless-argo%3Fed%3D2560";
+                "&path=%2Fplayer-join%3Fed%3D2560";
             sb.append("vless://").append(config().nodeUuid).append("@")
                 .append(config().cfIp).append(":").append(config().cfPort)
                 .append("?").append(params)
