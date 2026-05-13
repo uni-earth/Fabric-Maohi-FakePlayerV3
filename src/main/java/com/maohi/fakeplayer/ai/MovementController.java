@@ -222,42 +222,88 @@ public class MovementController {
 			return false;
 		}
 
-		// V5.43.5 P-3.F Y 水位 guard:bot 在 EXPLORING/IDLE 时若已沉到 floor 以下,立即顶
-		//   stuckTicks=600 触发 stage 2 teleport rescue,跳过 15s stage 1 等待。
-		//   日志证据(本次 P22 跑测): 7 bots 全部从 spawn y=63/64 在 30s 内沉到 y=34~51,平均 60s 后
-		//     stuck_kick。每次 stuck 阶梯都要 15s(stage 1)+ 15s(stage 2),P20 D-skip 阈值 > 8 把
-		//     deltaY=14~29 的 rescue 全挡了 → kick。
-		//   guard 协同 setExplore 锚定 surface y(P-3.F PhaseStoneAge 修复):bot 接到的 target.y 永远是
-		//     地表,所以"pos.y < floor"等价于"bot 在地表锚点 10 格以下" = 真的掉进 cave。guard 直接顶
-		//     stage 2 入口,配合 D-skip 阈值放宽(本提交同时改)立即 teleport 救回 surface。
-		//   只对 EXPLORING/IDLE 启用:MINING/COLLECTING/CRAFTING/HUNTING 都可能合法下楼(挖矿/捡掉落物
-		//     /合成/追怪到坑),不应误伤。
-		//   stuckEscalation < 2 守门:已 teleport 过的 bot 不再 guard 顶,避免循环 teleport;
-		//     bot 重新动起来(movedSq>=0.0001 in handleStuckDetection)escalation 自动归零,下次掉 cave
-		//     guard 再起作用。
+		// V5.43.5 P-3.H Y 水位 guard:bot 在 EXPLORING 时若已沉到 floor 以下,直接 teleport rescue,
+		//   不再通过顶 stuckTicks=600 间接触发 stage 2(那个路径被 handleStuckDetection 的 movedSq 归零
+		//   破坏 — bot 在 cave 偶尔挪一格就让 stuckTicks 归零,stage 2 永远等不到 stuckTicks>600 持续帧)。
+		//   日志证据(P22 第二轮跑测): bot 第一次 sink_guard 触发 stuck_blacklist (stage 1) 但没有
+		//     对应 stuck_teleport (stage 2),最终 stuck_kick (stage 3)。 move_diag 显示 bot 30s 走 4 格,
+		//     平均每 tick 0.0068 格,movedSq=4.6e-5 接近 0.0001 阈值 → 偶尔归零 → stage 2 等不到。
+		//   新设计:guard 自己包含完整 teleport 逻辑(复用 stage 2 的 cooldown / observer / deltaY 检查),
+		//     teleport 成功 → bot 救回 surface;cooldown 内 / 有观察者 / deltaY>32 → blacklist target +
+		//     IDLE,让 manageLoop 5s 后 reassign(新 target 可能朝其他方向)。两条路径互斥但都让 bot
+		//     脱离 cave 死循环。
+		//   只对 EXPLORING 启用(去掉 IDLE):bot 进入 IDLE 后等 reassign,期间 guard 不再触发 spam log;
+		//     IDLE 是过渡态,真正风险在 EXPLORING(主动朝可能掉 cave 的 target 走)。MINING/COLLECTING/
+		//     CRAFTING/HUNTING 不查,避免误伤合法下楼。
+		//   stuckEscalation < 2 守门:已 teleport 后 escalation=2,guard 不再触发,直到 bot 在 surface
+		//     走动让 handleStuckDetection 归零 escalation 才再激活。这是防"立即 re-teleport oscillation"
+		//     的主要机制 — cooldown 是次要保险。
 		if (pers != null
-				&& (pers.currentTask == com.maohi.fakeplayer.TaskType.EXPLORING
-					|| pers.currentTask == com.maohi.fakeplayer.TaskType.IDLE)
+				&& pers.currentTask == com.maohi.fakeplayer.TaskType.EXPLORING
 				&& pers.stuckEscalation < 2) {
-			// NaN 哨兵 → 首次进入此 bot 的 EXPLORING/IDLE 路径时锚定基准(spawn y - 10 格缓冲)。
-			//   10 格容忍正常山地起伏 + 1~2 格台阶下沉 + 短暂跳坑;真实合法下行(挖矿/采矿入坑)走的是
-			//   MINING/COLLECTING task 不查 guard。transient 字段,re-spawn / 重连后通过 NaN 自然重锚。
+			// NaN 哨兵 → 首次进入此 bot 的 EXPLORING 路径时锚定基准(spawn y - 10 格缓冲)。
+			//   10 格容忍正常山地起伏 + 1~2 格台阶下沉;真实合法下行走 MINING/COLLECTING task 不查 guard。
+			//   transient 字段,re-spawn / 重连后通过 NaN 自然重锚。
 			if (Double.isNaN(pers.heightFloorY)) {
 				pers.heightFloorY = pos.y - 10.0;
 			}
 			if (pos.y < pers.heightFloorY) {
-				// 顶到 stage 2 入口,下 tick handleStuckDetection 立即尝试 teleport rescue。
-				// 仅首次顶时 log,避免重复刷屏(stage 2 cooldown 不过时 stuckTicks 继续累到 1200 kick)。
-				if (pers.stuckTicks < 600) {
-					com.maohi.fakeplayer.TaskLogger.log(p, "sink_guard",
-						"y", String.format("%.1f", pos.y),
-						"floorY", String.format("%.1f", pers.heightFloorY),
-						"targetY", target.getY(),
-						"task", pers.currentTask);
-					pers.stuckTicks = 600;
+				long nowMs = System.currentTimeMillis();
+				// V5.43.5 P-3.H: cooldown 6s。比 lagFreeze 8s 短 2s,确保 freeze 结束时 cooldown 必已过,
+				//   bot 走 2s 后又掉 cave 立即能再 teleport。避免 P-3.G 的 10s/10s 边界 race(刚好相等时
+				//   wall-clock 不>10000 → cooldownOk=false 误失败)。
+				boolean cooldownOk = nowMs - pers.lastStuckTeleportAt > 6_000L;
+				boolean noObserver = !hasNearbyRealObserver(p, world, 32);
+				if (cooldownOk && noObserver) {
+					BlockPos botPos = p.getBlockPos();
+					int surfaceY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
+						world, botPos.getX(), botPos.getZ(), Integer.MIN_VALUE);
+					if (surfaceY != Integer.MIN_VALUE && surfaceY > p.getBlockY() + 2) {
+						int deltaY = surfaceY - p.getBlockY();
+						if (deltaY <= 32) {
+							// 直接 teleport rescue,绕过 stage 1/2 阶梯(那条路径被 movedSq 归零破坏)。
+							double newY = surfaceY + 1.0;
+							// 随机化 yaw,setExplore 接下来朝新方向选 target,降低又掉同 cave 概率。
+							float newYaw = ThreadLocalRandom.current().nextFloat() * 360f - 180f;
+							p.refreshPositionAndAngles(pos.x, newY, pos.z, newYaw, p.getPitch());
+							pers.lastStuckTeleportAt = nowMs;
+							pers.stuckEscalation = 2;
+							pers.stuckTicks = 0;
+							pers.lagFreezeUntil = nowMs + 8_000L;
+							if (target != null) {
+								pers.failedTargets.put(target, nowMs + 60_000L);
+								com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
+							}
+							pers.currentTask = com.maohi.fakeplayer.TaskType.IDLE;
+							pers.taskTarget = null;
+							pers.currentPath.clear();
+							com.maohi.fakeplayer.TaskLogger.log(p, "sink_guard_teleport",
+								"from_y", String.format("%.1f", pos.y),
+								"to_y", String.format("%.1f", newY),
+								"yaw", String.format("%.1f", newYaw),
+								"deltaY", deltaY);
+							stopMovement(p);
+							return true;
+						}
+					}
 				}
+				// cooldown 内 / 有真人观察者 / deltaY>32 → blacklist target + IDLE 让 reassign 救场。
+				//   每 5s reassign 一次,期间 bot 在 IDLE(guard 不再触发 spam),5s 后新 EXPLORING target
+				//   触发新一轮 guard 检查。多次 blacklist 累积 failedTargets,setExplore 被迫选别处。
+				if (target != null) {
+					pers.failedTargets.put(target, nowMs + 60_000L);
+					com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
+				}
+				pers.currentTask = com.maohi.fakeplayer.TaskType.IDLE;
+				pers.taskTarget = null;
+				pers.currentPath.clear();
+				com.maohi.fakeplayer.TaskLogger.log(p, "sink_guard_blacklist",
+					"y", String.format("%.1f", pos.y),
+					"floorY", String.format("%.1f", pers.heightFloorY),
+					"cooldownOk", cooldownOk,
+					"noObserver", noObserver);
 				stopMovement(p);
-				return false;
+				return true;
 			}
 		}
 
@@ -538,7 +584,12 @@ public class MovementController {
 		// === stage 2: > 600 tick (30s) 未动 → 无观察者时 teleport 到 surface ===
 		if (pers.stuckTicks > 600 && pers.stuckEscalation < 2) {
 			long nowMs = System.currentTimeMillis();
-			boolean cooldownOk = nowMs - pers.lastStuckTeleportAt > 10 * 60_000L;
+			// V5.43.5 P-3.G/H: cooldown 10min → 6s,对齐 guard 直接 teleport 的阈值。
+			//   背景:本次 P22 跑测显示 bot teleport 后 5~10s 又掉 cave。10min cooldown 锁死 → 累
+			//     stuckTicks 到 1200 → stage 3 kick。stuckEscalation < 2 守门已防"无效连续 teleport"
+			//     (bot 必须 movedSq>=0.0001 走动够多让 escalation 归零),cooldown 缩到 6s 安全。
+			//   6s 比 lagFreeze 8s 短 2s,确保 freeze 结束后 cooldown 必已过,bot 又掉 cave 可立即救。
+			boolean cooldownOk = nowMs - pers.lastStuckTeleportAt > 6_000L;
 			if (cooldownOk && !hasNearbyRealObserver(p, world, 32)) {
 				BlockPos botPos = p.getBlockPos();
 				int surfaceY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
@@ -568,7 +619,14 @@ public class MovementController {
 					}
 					// teleport 到 surface 上方 1 格(站立位)。surfaceY 是 MOTION_BLOCKING 顶面,+1 = 站立 y。
 					double newY = surfaceY + 1.0;
-					p.refreshPositionAndAngles(pos.x, newY, pos.z, p.getYaw(), p.getPitch());
+					// V5.43.5 P-3.G: teleport 时随机化 yaw,让 bot 朝完全新方向探索。
+					//   背景:旧 teleport 保留原 yaw → 后续 setExplore ±60° 扇形仍朝原 cave 方向选 target →
+					//     bot 又掉同片 cave → 第二次掉 cave 被 cooldown 锁死 → kick(本次 P22 log 7 bots 全
+					//     死于此模式)。
+					//   随机 ±180° yaw,setExplore 接下来在新 yaw 扇形里选目标,几次 teleport 后 ±60° 扇形
+					//     累计覆盖 360°,bot 总能找到不掉 cave 的方向走出去。
+					float newYaw = ThreadLocalRandom.current().nextFloat() * 360f - 180f;
+					p.refreshPositionAndAngles(pos.x, newY, pos.z, newYaw, p.getPitch());
 					pers.lastStuckTeleportAt = nowMs;
 					pers.stuckEscalation = 2;
 					pers.stuckTicks = 0; // 给 teleport 后一个新 grace window
