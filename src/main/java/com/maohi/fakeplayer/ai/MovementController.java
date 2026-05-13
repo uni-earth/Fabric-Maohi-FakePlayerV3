@@ -654,8 +654,27 @@ public class MovementController {
 				//   stuckTicks 累得极慢)。配合 P21-a 的 blocked_no_path += 200,5 次 fail 累到 600
 				//   触发 stage 2,这里 fallback 立刻推 stage 3。stage 2 入口已通过 cooldownOk +
 				//   无 observer 检查,kick 安全。
+				// V5.43.5 P-3.I: stuckTicks=1199 (immediate kick) → 900 + blacklist + IDLE。
+				//   背景:本次 P22 log TinyHunter 刚完成 mine+craft logs/planks/table 5 次进展,新 task
+				//     WOODCUTTING target=(-16,70,28) 卡 y=67 (jungle 树顶,surface=66 差 1 格) → P21-b 触发
+				//     immediate kick → bot 进度被 kick 重置(虽然 inventory saved=true 保留,但用户体验差)。
+				//   surfaceY <= blockY+2 实际包括 bot 站正常地表上方 1 格(脚下=方块顶=blockY-1=surfaceY)的
+				//     合法情形 — 这种 bot 只是被附近方块挡住,不该立即 kick。
+				//   新设计:stuckTicks 推到 900(stage 3 阈值 1200 前 15s = 300 ticks @ 20Hz),给 bot
+				//     一次 reassign 机会(manageLoop 5s 周期 = 3 次 reassign 内可能走出)。如果 bot 真完全
+				//     卡 → 15s 后 stuckTicks 自然累到 1200 → stage 3 kick(handleStuckDetection 每 tick
+				//     movedSq<0.0001 时 stuckTicks++);如果 bot 走起来 → movedSq>=0.0001 归零 stuckTicks
+				//     + escalation,救回。
+				//   escalation=2 阻止 stage 2 重入(同原行为),但 stage 3 阈值 stuckTicks>1200 仍可触发。
 				pers.stuckEscalation = 2;
-				pers.stuckTicks = 1199;
+				pers.stuckTicks = Math.max(pers.stuckTicks, 900);
+				if (target != null) {
+					pers.failedTargets.put(target, System.currentTimeMillis() + 60_000L);
+					com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
+				}
+				pers.currentTask = com.maohi.fakeplayer.TaskType.IDLE;
+				pers.taskTarget = null;
+				pers.currentPath.clear();
 				com.maohi.fakeplayer.TaskLogger.log(p, "stuck_no_surface",
 					"from_y", String.format("%.1f", pos.y),
 					"surface_y", surfaceY == Integer.MIN_VALUE ? "n/a" : String.valueOf(surfaceY));

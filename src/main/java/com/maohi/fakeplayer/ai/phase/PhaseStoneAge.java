@@ -398,6 +398,16 @@ public final class PhaseStoneAge implements Phase {
             // P22 I: 倍率 0.5 → 0.2(最大 1.2×),整体最远 30 × 1.2 × 1.0 = 36 格,
             //   保持在 A* 2048 节点覆盖范围内,避免 setExplore 选不可达 target → 死循环。
             double multiplier = 1.0 + (attempt / 3) * 0.2;
+            // V5.43.5 P-3.I micro_explore: fails 2-3 时缩小半径到 ~12 格让 bot 先小步挪出 blocked 局部。
+            //   背景:本次 P22 log IronSky 在 jungle 反复 blocked_no_path (fails=1,2,3) 然后 force_explore
+            //     (fails=4+)。但 force_explore 半径 60+ 格在 jungle 同样 A* 找不到路 → 死循环。
+            //   micro_explore 在 fails=2,3 时把 EXPLORE_RADIUS 从 30 缩到 ~12 格,bot 先朝近处走一步,
+            //     哪怕只挪 12 格也可能挤过当前叶子片 → 下次 setExplore 用 bot 新 yaw + 新位置重新展开。
+            //   fails<2 走正常 30 格半径(jungle 外 biome 不需缩);fails>=4 走 force_explore(由
+            //     forceExploreAfterFailures 阶梯接管,半径 60-80)。
+            if (p.taskFailCount >= 2) {
+                multiplier *= 0.4; // 30 × 0.4 = 12 格
+            }
             double dist = EXPLORE_RADIUS * multiplier * (0.85 + rng.nextDouble() * 0.15); // 0.85~1.0 半径,贴外圈
             
             int dx = (int) Math.round(-Math.sin(rad) * dist);

@@ -383,17 +383,21 @@ public class VirtualPlayerManager {
                                         //   的机会。doSmartMove 内 A* findPath cooldown=100 ticks(5s),
                                         //   cooldown 期间 bot 朝 taskTarget yaw 自由走(vanilla 物理处理跳坑/
                                         //   爬坡/sprint),平原/草原地形大概率能走过。5s 后仍未到达再 fail。
+                                        //   V5.43.5 P-3.I: 5s → 10s。jungle biome 叶子密集 + 树间隙窄,5s 经常不够
+                                        //     穿过(本次 P22 log IronSky 10+ 次 blocked_no_path 触发,5s 窗口期间
+                                        //     bot 撞叶子来回挣扎 → 过期 fail → reassign → 又 fail 循环)。10s 给
+                                        //     vanilla 物理足够时间挤过 1-2 棵树挡道。
                                         //   边界设计(3-state,无 30s cooldown):
-                                        //   - 未启用(==0L) → 开 5s 窗口,继续走;不计 fail
+                                        //   - 未启用(==0L) → 开 10s 窗口,继续走;不计 fail
                                         //   - 窗口内(now < deadline) → 什么都不做,bot 继续物理走
-                                        //   - 已过期(now >= deadline) → 真 fail + 清 deadline=0L,下个 task 重新起 5s 窗口
+                                        //   - 已过期(now >= deadline) → 真 fail + 清 deadline=0L,下个 task 重新起 10s 窗口
                                         //   原 30s cooldown 设计错误:fail 后 deadline=nowMs 让所有后续 blocked 命中
                                         //   fallbackExpired,reassign 给的新 target 第一 tick 就 instant-fail,丧失 fallback 价值。
                                         long nowMs = System.currentTimeMillis();
                                         if (personality.blockedNoPathFallbackUntil == 0L) {
-                                            personality.blockedNoPathFallbackUntil = nowMs + 5_000L;
+                                            personality.blockedNoPathFallbackUntil = nowMs + 10_000L;
                                         } else if (nowMs >= personality.blockedNoPathFallbackUntil) {
-                                            // 5s 窗口过期 → 真 fail(走旧路径)
+                                            // 10s 窗口过期 → 真 fail(走旧路径)
                                             com.maohi.fakeplayer.TaskLogger.log(p, "task_fail",
                                                 "reason", "blocked_no_path", "task", personality.currentTask,
                                                 "target", snapshotTarget);
@@ -1902,14 +1906,15 @@ prepareAndSpawnVirtualPlayer();
                 // V5.30 真正的死路:既被阻挡,A* 也找不到路 → 计一次失败
                 // P22 E (handleMoveBlocked path): 与 manageLoop 主 doSmartMove 路径同语义,
                 //   3-state fallback(无 30s cooldown),两条路径共享 blockedNoPathFallbackUntil:
-                //   - ==0L (未启用) → 开 5s 窗口,return 不 fail
+                //   - ==0L (未启用) → 开 10s 窗口,return 不 fail
                 //   - now < deadline → 窗口内,return 不 fail
                 //   - now >= deadline → 真 fail + 清 deadline=0L
+                //   V5.43.5 P-3.I: 5s → 10s,与 manageLoop 主路径同步(jungle 叶子密集 5s 不够穿)。
                 //   原 30s cooldown 设计错误:fail 后 deadline=nowMs 让所有后续 blocked 命中
                 //   fallbackExpired,reassign 给的新 target 第一 tick 就 instant-fail。
                 long nowMs = System.currentTimeMillis();
                 if (personality.blockedNoPathFallbackUntil == 0L) {
-                    personality.blockedNoPathFallbackUntil = nowMs + 5_000L;
+                    personality.blockedNoPathFallbackUntil = nowMs + 10_000L;
                     return;
                 } else if (nowMs < personality.blockedNoPathFallbackUntil) {
                     // 窗口内,等 bot 物理走 + 下次 tick 重新评估

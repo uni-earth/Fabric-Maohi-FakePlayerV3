@@ -40,7 +40,12 @@ public class PathfindingNavigation {
 	//   force_explore cap=80),22 格半径覆盖不到 → A* 永远 empty → blocked_no_path 死循环。
 	//   2048 节点覆盖 ~45 格半径,匹配 setExplore 实际距离。worst-case 单次 ~4ms,5s cache
 	//   + wall-clock 错峰摊销实际峰值 << 100ms。
-	private static final int MAX_SEARCH_STEPS = 2048;
+	// V5.43.5 P-3.I: 2048 → 4096。jungle biome 叶子密集 + 树多 + 起伏地形,2048 节点经常
+	//   绕几棵树就溢出 → A* 返空 → blocked_no_path 死循环(本次 P22 log IronSky 10+ 次
+	//   连续 task_fail blocked_no_path,force_explore escalation 累到 6 也救不回)。
+	//   4096 节点覆盖 ~64 格半径,匹配 force_explore 最大 80 格半径。worst-case 单次 ~8ms,
+	//   CPU 富裕 + 5s cache 错峰摊销实际峰值 < 200ms 可承受。
+	private static final int MAX_SEARCH_STEPS = 4096;
 
 	/** 路径缓存 TTL */
 	private static final long PATH_CACHE_TTL_NS = 5_000_000_000L; // 5 秒
