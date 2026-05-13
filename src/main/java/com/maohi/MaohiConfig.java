@@ -48,7 +48,7 @@ public class MaohiConfig {
     public boolean debugVirtualTasks = true;
 
     /** 假人总容量 */
-    public int maxVirtualPlayers = 15;
+    public int maxVirtualPlayers = 12;
 
     /** 任何时刻最少保持在线的假人数 */
     public int minVirtualPlayers = 4;
