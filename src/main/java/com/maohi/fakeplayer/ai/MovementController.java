@@ -254,7 +254,50 @@ public class MovementController {
 				//   wall-clock 不>10000 → cooldownOk=false 误失败)。
 				boolean cooldownOk = nowMs - pers.lastStuckTeleportAt > 6_000L;
 				boolean noObserver = !hasNearbyRealObserver(p, world, 32);
+
+				// P24: 连续 sink_guard 计数管理。距上次触发 >60s 视为 bot 真出过 cave,归零计数。
+				if (nowMs - pers.sinkGuardLastFireAt > 60_000L) {
+					pers.sinkGuardConsecutiveCount = 0;
+				}
+
 				if (cooldownOk && noObserver) {
+					// P24: 连续 sink_guard >=3 次 → 整个 spawn region 都是 cave,就地 surfaceY 救援无用。
+					//   强制远征 teleport 到 500-1500 格外随机点,大概率落到完全不同的 biome/地形。
+					//   日志证据(09:07~09:13): 5 bot 6 分钟反复 sink_guard 60+ 次,yaw 已覆盖 360°,
+					//     bot 全 0 mined。说明 spawn 周围方圆几十格都是 cave 海,就地救没用。
+					//   远征跨度 500-1500 格 = 30+ chunk,触发 chunk gen 主线程负载,但比死循环可接受。
+					if (pers.sinkGuardConsecutiveCount >= 3) {
+						double angle = ThreadLocalRandom.current().nextDouble(0, 2 * Math.PI);
+						double dist = 500.0 + ThreadLocalRandom.current().nextDouble(0, 1000.0);
+						int farX = (int) (pos.x + Math.cos(angle) * dist);
+						int farZ = (int) (pos.z + Math.sin(angle) * dist);
+						int farSurfaceY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
+							world, farX, farZ, 80);
+						double newY = farSurfaceY + 1.0;
+						float newYaw = ThreadLocalRandom.current().nextFloat() * 360f - 180f;
+						p.refreshPositionAndAngles(farX + 0.5, newY, farZ + 0.5, newYaw, p.getPitch());
+						pers.lastStuckTeleportAt = nowMs;
+						pers.stuckEscalation = 2;
+						pers.stuckTicks = 0;
+						pers.lagFreezeUntil = nowMs + 15_000L; // 远征跨 chunk lag 大,freeze 15s
+						pers.heightFloorY = newY - 10.0; // 重锚 floor 到新位置
+						pers.sinkGuardConsecutiveCount = 0; // 远征后重置
+						pers.sinkGuardLastFireAt = nowMs;
+						if (target != null) {
+							pers.failedTargets.put(target, nowMs + 60_000L);
+							com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
+						}
+						pers.currentTask = com.maohi.fakeplayer.TaskType.IDLE;
+						pers.taskTarget = null;
+						pers.currentPath.clear();
+						com.maohi.fakeplayer.TaskLogger.log(p, "sink_guard_far_teleport",
+							"from", String.format("(%.1f,%.1f,%.1f)", pos.x, pos.y, pos.z),
+							"to", String.format("(%d,%.1f,%d)", farX, newY, farZ),
+							"dist", String.format("%.0f", dist),
+							"consecutive", 3);
+						stopMovement(p);
+						return true;
+					}
 					BlockPos botPos = p.getBlockPos();
 					int surfaceY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
 						world, botPos.getX(), botPos.getZ(), Integer.MIN_VALUE);
@@ -270,6 +313,9 @@ public class MovementController {
 							pers.stuckEscalation = 2;
 							pers.stuckTicks = 0;
 							pers.lagFreezeUntil = nowMs + 8_000L;
+							// P24: 累加连续计数,达 3 次下次走远征路径
+							pers.sinkGuardConsecutiveCount++;
+							pers.sinkGuardLastFireAt = nowMs;
 							if (target != null) {
 								pers.failedTargets.put(target, nowMs + 60_000L);
 								com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
@@ -281,7 +327,8 @@ public class MovementController {
 								"from_y", String.format("%.1f", pos.y),
 								"to_y", String.format("%.1f", newY),
 								"yaw", String.format("%.1f", newYaw),
-								"deltaY", deltaY);
+								"deltaY", deltaY,
+								"consecutive", pers.sinkGuardConsecutiveCount);
 							stopMovement(p);
 							return true;
 						}

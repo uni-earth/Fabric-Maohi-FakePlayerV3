@@ -311,6 +311,14 @@ public class Personality {
 	//   transient:仅本会话内存,re-spawn / 重连后通过 NaN 哨兵自然重新锚定。
 	public transient double heightFloorY = Double.NaN;
 
+	// P24: sink_guard 连续触发计数。短时间内反复 sink_guard_teleport(同 spawn 周围全是 cave)
+	//   形成的死循环:bot 落地→走两步→掉新 cave→teleport→又落另一个 cave 边缘→反复。
+	//   日志证据(09:07~09:13): 5 bot 6 分钟全 0 mined 0 ach,每 bot 每 30s 触发 5+ 次 sink_guard_teleport。
+	//   计数策略:每次 sink_guard_teleport 触发 +1;距上次触发 wall-clock 超过 60s 且本次 spawn 后
+	//     至少 1 次 mine_done(说明 bot 真出过 cave)即归零。达阈值(3 次)走远征 teleport。
+	public transient int sinkGuardConsecutiveCount = 0;
+	public transient long sinkGuardLastFireAt = 0L;
+
 	// V5.30 W2S 收尾:熔炉落地状态机(同 table 节奏)。FURNACE 是 STONE_AGE→IRON_AGE 唯一桥梁,
 	// 不放下来 SmeltingBehavior.findFurnace 永远 null,raw_iron 堆背包。
 	public int furnacePlaceStage = 0;
