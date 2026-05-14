@@ -248,7 +248,7 @@ public final class CraftingBehavior {
 			return;
 		}
 
-		BlockPos workbench = findCraftingTable(player, 4);
+		BlockPos workbench = findCraftingTable(player, 6);
 		if (workbench == null) {
 			com.maohi.fakeplayer.TaskLogger.log(player, "craft_fail",
 				"reason", "no_workbench", "target",

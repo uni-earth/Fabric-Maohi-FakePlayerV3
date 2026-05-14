@@ -265,6 +265,9 @@ public class Personality {
 	public BlockPos tablePlaceSupportPos = null;
 	public long tablePlaceAtTick = 0L;
 	public long tableRestoreAtTick = 0L;
+	// planA P-2: 工作台放置失败计数与冷却。
+	public int tablePlaceFailCount = 0;
+	public long tablePlaceRetryCooldownUntil = 0L;
 	// planA P-1 诊断:tryPlaceCraftingTable 节流日志锚点(避免每 tick 刷屏)。
 	public transient long lastTablePlaceDiagAt = 0L;
 	// planA P-1 诊断:doSmartMove 节流日志锚点 + 上次取样位置(检测 bot 是否真的在动)。

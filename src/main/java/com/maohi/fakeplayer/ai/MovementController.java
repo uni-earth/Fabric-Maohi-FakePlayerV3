@@ -529,6 +529,12 @@ public class MovementController {
 	 */
 	private static boolean handleStuckDetection(ServerPlayerEntity p, com.maohi.fakeplayer.Personality pers,
 			ServerWorld world, Vec3d pos, BlockPos target) {
+		// P23-B: spawn grace period
+		// spawn 后前 5s 豁免 stuck 累加，避免 spawn 位置的瞬间物理问题直接开始卡死计时
+		if (pers.firstJoinAt > 0 && System.currentTimeMillis() - pers.firstJoinAt < 5_000L) {
+			return false;
+		}
+
 		// 首次采样:不算 stuck
 		if (Double.isNaN(pers.lastStuckSampleX)) {
 			pers.lastStuckSampleX = pos.x;
@@ -648,14 +654,58 @@ public class MovementController {
 					stopMovement(p);
 					return true;
 				}
-				// P21-b: surfaceY ≤ blockY+2 → bot 已经在地表(or 浮空),teleport 救不回。
+				// P23-A: Nudge Teleport
+				// surfaceY <= blockY+2 → bot 已经在地表附近，但仍物理卡死。尝试微距传送脱困。
+				BlockPos nudgePos = findNudgePosition(world, p.getBlockPos(), 3);
+				if (nudgePos != null && cooldownOk && !hasNearbyRealObserver(p, world, 32)) {
+					p.refreshPositionAndAngles(
+						nudgePos.getX() + 0.5, nudgePos.getY() + 1.0, nudgePos.getZ() + 0.5,
+						ThreadLocalRandom.current().nextFloat() * 360f - 180f, p.getPitch());
+					pers.lastStuckTeleportAt = nowMs;
+					pers.stuckEscalation = 2;
+					pers.stuckTicks = 0; // 新 grace window
+					pers.lagFreezeUntil = nowMs + 3_000L; // 微距只需短暂 freeze
+					if (target != null) {
+						pers.failedTargets.put(target, nowMs + 60_000L);
+						com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
+					}
+					pers.currentTask = com.maohi.fakeplayer.TaskType.IDLE;
+					pers.taskTarget = null;
+					pers.currentPath.clear();
+					com.maohi.fakeplayer.TaskLogger.log(p, "stuck_nudge_teleport",
+						"from", String.format("(%.1f,%.1f,%.1f)", pos.x, pos.y, pos.z),
+						"to", nudgePos);
+					stopMovement(p);
+					return true;
+				}
+
+				// P21-b: surfaceY ≤ blockY+2 且微传也失败 → 走原逻辑（stuckTicks=900 等 kick）。
 				//   日志证据: WardenWatcher38 卡 (33,66,22) 4 分钟,surface 跟 blockY 差不多 →
 				//   stage 2 永远进不去 teleport 分支 → stage 3 也累不到 1200(每 5s assign 1 次,
 				//   stuckTicks 累得极慢)。配合 P21-a 的 blocked_no_path += 200,5 次 fail 累到 600
 				//   触发 stage 2,这里 fallback 立刻推 stage 3。stage 2 入口已通过 cooldownOk +
 				//   无 observer 检查,kick 安全。
+				// V5.43.5 P-3.I: stuckTicks=1199 (immediate kick) → 900 + blacklist + IDLE。
+				//   背景:本次 P22 log TinyHunter 刚完成 mine+craft logs/planks/table 5 次进展,新 task
+				//     WOODCUTTING target=(-16,70,28) 卡 y=67 (jungle 树顶,surface=66 差 1 格) → P21-b 触发
+				//     immediate kick → bot 进度被 kick 重置(虽然 inventory saved=true 保留,但用户体验差)。
+				//   surfaceY <= blockY+2 实际包括 bot 站正常地表上方 1 格(脚下=方块顶=blockY-1=surfaceY)的
+				//     合法情形 — 这种 bot 只是被附近方块挡住,不该立即 kick。
+				//   新设计:stuckTicks 推到 900(stage 3 阈值 1200 前 15s = 300 ticks @ 20Hz),给 bot
+				//     一次 reassign 机会(manageLoop 5s 周期 = 3 次 reassign 内可能走出)。如果 bot 真完全
+				//     卡 → 15s 后 stuckTicks 自然累到 1200 → stage 3 kick(handleStuckDetection 每 tick
+				//     movedSq<0.0001 时 stuckTicks++);如果 bot 走起来 → movedSq>=0.0001 归零 stuckTicks
+				//     + escalation,救回。
+				//   escalation=2 阻止 stage 2 重入(同原行为),但 stage 3 阈值 stuckTicks>1200 仍可触发。
 				pers.stuckEscalation = 2;
-				pers.stuckTicks = 1199;
+				pers.stuckTicks = Math.max(pers.stuckTicks, 900);
+				if (target != null) {
+					pers.failedTargets.put(target, System.currentTimeMillis() + 60_000L);
+					com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
+				}
+				pers.currentTask = com.maohi.fakeplayer.TaskType.IDLE;
+				pers.taskTarget = null;
+				pers.currentPath.clear();
 				com.maohi.fakeplayer.TaskLogger.log(p, "stuck_no_surface",
 					"from_y", String.format("%.1f", pos.y),
 					"surface_y", surfaceY == Integer.MIN_VALUE ? "n/a" : String.valueOf(surfaceY));
@@ -665,7 +715,16 @@ public class MovementController {
 		}
 
 		// === stage 3: > 1200 tick (60s) 有玩家观察导致 teleport 被禁 → kick 重生 ===
-		if (pers.stuckTicks > 1200 && pers.stuckEscalation < 3) {
+		// P22 早期 bot 容忍翻倍:还没 unlock 任何 advancement 的新 bot 阈值 2400 ticks (2 分钟)。
+		//   背景:bot spawn 后 1~2 分钟就被 kick → 还没挖完第一棵树就重启 → 第一档成就永远拿不到。
+		//   日志证据:7 个 bot 平均 spawn → kick 时长 ~2 分钟,first mine_done 还没到。kick 重连后
+		//   personality saved=true 保留 unlockedAdvancements,但 task progress/inventory partial state
+		//   全清零 → bot 重新走 phase 流程,达成成就效率断崖式下降。
+		//   阈值切换条件:unlockedAdvancements.isEmpty() = 早期 bot 容忍 2400;否则用 1200 防真死锁。
+		//   "已解锁过任意成就" = bot 已经进入正反馈,1200 ticks (60s) 仍走不动可以 kick;
+		//   未解锁过 = 还在熟悉环境/找树阶段,多给 60s 缓冲。
+		int kickThreshold = pers.unlockedAdvancements.isEmpty() ? 2400 : 1200;
+		if (pers.stuckTicks > kickThreshold && pers.stuckEscalation < 3) {
 			pers.stuckEscalation = 3;
 			com.maohi.fakeplayer.TaskLogger.log(p, "stuck_kick",
 				"stuckTicks", pers.stuckTicks, "y", String.format("%.1f", pos.y),
@@ -713,5 +772,39 @@ public class MovementController {
 			if (other.squaredDistanceTo(p) < radiusSq) return true;
 		}
 		return false;
+	}
+
+	/**
+	 * P23-A: Nudge Teleport 的安全落点搜索。
+	 */
+	private static BlockPos findNudgePosition(ServerWorld world, BlockPos current, int radius) {
+		BlockPos best = null;
+		double bestDistSq = Double.MAX_VALUE;
+		for (int dx = -radius; dx <= radius; dx++) {
+			for (int dz = -radius; dz <= radius; dz++) {
+				if (dx == 0 && dz == 0) continue;  // 跳过当前格
+				int nx = current.getX() + dx;
+				int nz = current.getZ() + dz;
+				int ny = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(world, nx, nz, Integer.MIN_VALUE);
+				if (ny == Integer.MIN_VALUE) continue;
+				BlockPos candidate = new BlockPos(nx, ny, nz);
+				if (!isNudgeSafe(world, candidate)) continue;
+				double distSq = dx * dx + dz * dz;
+				if (distSq < bestDistSq) {
+					bestDistSq = distSq;
+					best = candidate;
+				}
+			}
+		}
+		return best;
+	}
+
+	/** isSpawnSupported 的轻量版：当前格+头顶 air，脚下固体 */
+	private static boolean isNudgeSafe(ServerWorld world, BlockPos pos) {
+		return world.getBlockState(pos).isAir()
+			&& world.getBlockState(pos.up()).isAir()
+			&& !world.getBlockState(pos.down()).isAir()
+			&& !world.getBlockState(pos.down()).isLiquid()
+			&& !world.getBlockState(pos.down()).getCollisionShape(world, pos.down()).isEmpty();
 	}
 }

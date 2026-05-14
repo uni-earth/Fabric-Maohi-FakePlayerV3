@@ -409,6 +409,19 @@ public class PlayerSpawner {
                 solidBelow++;
             }
         }
+        
+        // P23-C：至少 1 个水平方向可通行（防 1×1 坑 spawn）
+        boolean anyHorizontalExit = false;
+        for (net.minecraft.util.math.Direction dir : new net.minecraft.util.math.Direction[]{
+                net.minecraft.util.math.Direction.NORTH, net.minecraft.util.math.Direction.SOUTH, net.minecraft.util.math.Direction.EAST, net.minecraft.util.math.Direction.WEST}) {
+            net.minecraft.util.math.BlockPos side = pos.offset(dir);
+            if (world.getBlockState(side).isAir() && world.getBlockState(side.up()).isAir()) {
+                anyHorizontalExit = true;
+                break;
+            }
+        }
+        if (!anyHorizontalExit) return false;
+
         return solidBelow >= 2;
     }
 
