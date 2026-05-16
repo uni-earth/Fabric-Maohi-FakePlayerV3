@@ -156,7 +156,7 @@ public class MovementController {
 			p.setYaw(p.getYaw() + perlinLike(noisePhaseYaw * 0.8, noiseTime, 1.5f));
 			return false;
 		}
-		// V5.22: 早期阶段(石器/铁器)豁免 sightseeing,基础成就期不能被"看风景"吃 5 秒
+		// V5.22: 早期阶段(木器/石器/铁器)豁免 sightseeing,基础成就期不能被"看风景"吃 5 秒
 		boolean lateGame = pers != null && pers.growthPhase != null
 			&& pers.growthPhase.ordinal() >= GrowthPhase.DIAMOND_AGE.ordinal();
 		if (lateGame && ThreadLocalRandom.current().nextInt(300) == 0) {

@@ -40,7 +40,7 @@ public final class KillMobTrigger implements AchievementTrigger {
 	public boolean shouldRun(ServerPlayerEntity player, Personality personality) {
 		if (TriggerUtil.alreadyUnlocked(personality, ADV_ID)) return false;
 		// 钻石阶段及以后已经常打怪,不需要兜底;
-		// 早期阶段(石器/铁器)是 80% 假人卡住的位置,这里加强分配
+		// 早期阶段(木器/石器/铁器)是 80% 假人卡住的位置,这里加强分配
 		return personality.growthPhase == null
 			|| personality.growthPhase.ordinal() <= GrowthPhase.IRON_AGE.ordinal();
 	}

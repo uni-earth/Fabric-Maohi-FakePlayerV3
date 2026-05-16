@@ -51,8 +51,8 @@ public final class PhaseStoneAge implements Phase {
     /** WOOD_START → WOOD_CRAFT 的 log 当量阈值。
      *  vanilla 推链需要:1 log → 4 planks(table) + ≥1 log → 4 planks(stick+wood pickaxe),
      *  保险起见取 1 log 当量(plankCount/4 也算"已转化的 log")。只要兜里有木头就去推链, 不要赖在树林里。
-     */
-    private static final int WOOD_LOGS_TARGET = 1;
+     *  V5.44: pkg-private 让 PhaseWoodAge 复用 */
+    static final int WOOD_LOGS_TARGET = 1;
 
     /** STONE_START → STONE_TOOL 的 cobble 阈值(vanilla 石镐 = 3 cobble + 2 stick) */
     private static final int COBBLE_FOR_STONE_PICK = 3;
@@ -60,22 +60,26 @@ public final class PhaseStoneAge implements Phase {
     /** STONE_TOOL 内,cobble 攒到该值之后才允许 IDLE 等 craft;否则继续挖以备多产物(石剑/石斧/熔炉) */
     private static final int COBBLE_STABLE_THRESHOLD = 8;
 
-    /** V5.42 死锁 #1: bot 远离工作台时,在该半径内回找自己放过的 CRAFTING_TABLE */
-    private static final int WORKBENCH_RETURN_RADIUS = 32;
-    /** V5.42 死锁 #1: bot 与工作台的"贴近"距离平方,与 CraftingBehavior.findCraftingTable(6) 同语义 */
-    private static final double WORKBENCH_NEARBY_SQ = 36.0;
+    /** V5.42 死锁 #1: bot 远离工作台时,在该半径内回找自己放过的 CRAFTING_TABLE
+     *  V5.44: pkg-private 让 PhaseWoodAge 复用 */
+    static final int WORKBENCH_RETURN_RADIUS = 32;
+    /** V5.42 死锁 #1: bot 与工作台的"贴近"距离平方,与 CraftingBehavior.findCraftingTable(6) 同语义
+     *  V5.44: pkg-private 让 PhaseWoodAge 复用 */
+    static final double WORKBENCH_NEARBY_SQ = 36.0;
 
     /**
      * V5.30 STONE_AGE 内部细分子状态。
+     * V5.44: 拆出 PhaseWoodAge 后,WOOD_START/WOOD_CRAFT 迁出本枚举(由 PhaseWoodAge.SubPhase 独立定义)。
      * public 让 TaskLogger / debug 工具可以查询当前 sub-phase。
      */
     public enum SubPhase {
-        WOOD_START, WOOD_CRAFT, STONE_START, STONE_TOOL, STONE_STABLE,
+        STONE_START, STONE_TOOL, STONE_STABLE,
         STRIP_MINE_DESCEND, STRIP_MINE_LAYER, STRIP_MINE_ASCEND
     }
 
-    /** 一次扫包聚合 sub-phase 决策需要的全部计数,避免重复 inv 遍历 */
-    private static final class Digest {
+    /** 一次扫包聚合 sub-phase 决策需要的全部计数,避免重复 inv 遍历
+     *  V5.44: pkg-private 让 PhaseWoodAge 复用同一份 Digest */
+    static final class Digest {
         int logCount = 0;
         int plankCount = 0;
         int stickCount = 0;
@@ -89,7 +93,7 @@ public final class PhaseStoneAge implements Phase {
         int logEquivalent() { return logCount + plankCount / 4; }
     }
 
-    private static Digest scan(ServerPlayerEntity player) {
+    static Digest scan(ServerPlayerEntity player) {
         Digest d = new Digest();
         PlayerInventory inv = player.getInventory();
         for (int i = 0; i < inv.size(); i++) {
@@ -123,16 +127,22 @@ public final class PhaseStoneAge implements Phase {
         if (d.hasAnyPickaxe) {
             return d.cobbleCount < COBBLE_FOR_STONE_PICK ? SubPhase.STONE_START : SubPhase.STONE_TOOL;
         }
-        // 没任何镐:看是否有原料推 craft 链。
-        // V5.42.5 严重修复: 如果已经有工作台了(d.hasTable), 哪怕木头用光了也要留在 WOOD_CRAFT 寻找木头做镐子, 
-        // 不要退回 WOOD_START 导致重新去砍树/找树, 这样才能保住工作台不丢。
-        if (d.hasTable || d.logEquivalent() >= WOOD_LOGS_TARGET) return SubPhase.WOOD_CRAFT;
-        return SubPhase.WOOD_START;
+        // V5.44 防御兜底: STONE_AGE 但无任何镐(极少出现 — detectPhase 的 v544_migration 应已降到 WOOD_AGE)。
+        //   assignTask 入口已有 PhaseWoodAge.INSTANCE 转发,这条路径几乎不可达;保险起见返回 STONE_START。
+        return SubPhase.STONE_START;
     }
 
     @Override
     public void assignTask(ServerPlayerEntity player, Personality personality, PhaseContext ctx) {
         Digest d = scan(player);
+
+        // V5.44 防御: STONE_AGE bot 异常无镐(理论上 detectPhase v544_migration 应处理) → 委托 PhaseWoodAge,
+        //   保证 W2S 链有人接管,不会卡死在 STONE_AGE 无镐的虚假状态。
+        if (!d.hasAnyPickaxe) {
+            PhaseWoodAge.INSTANCE.assignTask(player, personality, ctx);
+            return;
+        }
+
         SubPhase sub = classify(d, personality);
 
         // V5.30 调试:sub-phase 也带进 assign 日志,定位"卡在哪一格"
@@ -155,48 +165,6 @@ public final class PhaseStoneAge implements Phase {
         // (旧 if-block 已移除)
 
         switch (sub) {
-            case WOOD_START -> assignChopTree(player, personality, ctx);
-
-            case WOOD_CRAFT -> {
-                // V5.42 死锁 #1b:wooden_pickaxe 需要工作台 (3×3 配方),与 STONE_TOOL 同款"远离工作台"问题。
-                //   bot 合完 crafting_table 后 plank 消耗,reassign 把 bot 派去远处砍树,
-                //   走出工作台 6 格 → autoCraftStoneTools 的 wooden_pickaxe 分支 (要求 workbenchNearby)
-                //   永远不命中 → 即使 plank=6 stick=6 也合不出木镐 → 永卡 WOOD_CRAFT。
-                //   修复:有合木镐原料 (plank≥3 + stick≥2 + !hasAnyPickaxe) 时,优先走回工作台。
-                if (!d.hasAnyPickaxe && d.plankCount >= 3 && d.stickCount >= 2) {
-                    BlockPos workbench = com.maohi.fakeplayer.ai.CraftingBehavior
-                        .findCraftingTable(player, WORKBENCH_RETURN_RADIUS);
-                    boolean nearWorkbench = workbench != null
-                        && player.getBlockPos().getSquaredDistance(workbench) <= WORKBENCH_NEARBY_SQ;
-                    if (nearWorkbench) {
-                        // 工作台 6 格内 → IDLE 等 autoCraftStoneTools 推 wooden_pickaxe
-                        setIdle(personality, player, 100);
-                        return;
-                    } else if (workbench != null) {
-                        // 工作台 6~32 格外 → 走回去
-                        set(personality, player, TaskType.EXPLORING, workbench);
-                        return;
-                    }
-                    // workbench == null:32 格内没有自己放过的工作台。
-                    //   背包若有 plank≥4 → autoCraftStoneTools 会触发新工作台合成 (plank≥4 + !hasTable + !workbenchNearby);
-                    //   若 plank=3(刚够 wooden_pickaxe 但不够新表),fall through 到下面砍树补料。
-                }
-
-                // 默认链路:CraftingBehavior 在 VPM tickSurvivalAndProgression 每 tick 调用,
-                // 会自动按 plank → table → stick 顺序推链(全在背包),这里只需保证原料够。
-                if (d.logEquivalent() < WOOD_LOGS_TARGET) {
-                    assignChopTree(player, personality, ctx);
-                } else {
-                    // 原料齐了,IDLE 5s 等 craft 触发(下个 100-tick reassign 重新评估)
-                    // V5.43.6 P-2: 如果放置一直失败(处于冷却中), 说明脚下不适合放表, 强迫 EXPLORE 换地方
-                    if (player.getEntityWorld().getTime() < personality.tablePlaceRetryCooldownUntil) {
-                         setExplore(personality, player);
-                         return;
-                    }
-                    setIdle(personality, player, 100);
-                }
-            }
-
             case STONE_START -> assignMineStone(player, personality, ctx);
 
             case STONE_TOOL -> {
@@ -270,7 +238,8 @@ public final class PhaseStoneAge implements Phase {
         }
     }
 
-    private static void assignChopTree(ServerPlayerEntity player, Personality p, PhaseContext ctx) {
+    /** V5.44: pkg-private 让 PhaseWoodAge 复用同一份"砍树"任务派发(含吸附树根/EMPTY/RICH 标注) */
+    static void assignChopTree(ServerPlayerEntity player, Personality p, PhaseContext ctx) {
         BlockPos target = ctx.findLog.apply(player.getEntityWorld(), player.getBlockPos());
         if (target != null) {
             target = snapToTreeBase(player.getEntityWorld(), target);
@@ -388,7 +357,8 @@ public final class PhaseStoneAge implements Phase {
         return cur;
     }
 
-    private static void set(Personality p, ServerPlayerEntity player, TaskType type, BlockPos target) {
+    /** V5.44: pkg-private 让 PhaseWoodAge 复用 */
+    static void set(Personality p, ServerPlayerEntity player, TaskType type, BlockPos target) {
         p.currentTask = type;
         p.taskTarget = target;
         p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_WORK;
@@ -409,8 +379,9 @@ public final class PhaseStoneAge implements Phase {
         p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + dynamicTimeoutTicks;
     }
 
-    /** WOOD_CRAFT/STONE_TOOL 等 craft 时的短 IDLE — 不浪费 task slot 给假目标 */
-    private static void setIdle(Personality p, ServerPlayerEntity player, int timeoutTicks) {
+    /** WOOD_CRAFT/STONE_TOOL 等 craft 时的短 IDLE — 不浪费 task slot 给假目标
+     *  V5.44: pkg-private 让 PhaseWoodAge 复用 */
+    static void setIdle(Personality p, ServerPlayerEntity player, int timeoutTicks) {
         p.currentTask = TaskType.IDLE;
         p.taskTarget = player.getBlockPos();
         p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + timeoutTicks;
@@ -424,8 +395,9 @@ public final class PhaseStoneAge implements Phase {
      *
      * P0 改进: RICH region 权重5 / 未知3 / MEDIUM2 / EMPTY被跳过
      * P1 改进: 同一批候选中，biome 亲和度高的额外+1权重（不会超过RICH，只是平局打破者）
+     * V5.44: pkg-private 让 PhaseWoodAge 复用同一份探索逻辑(WOOD_AGE/STONE_AGE 共用 setExplore)
      */
-    private static void setExplore(Personality p, ServerPlayerEntity player) {
+    static void setExplore(Personality p, ServerPlayerEntity player) {
         // P23-D: 丛林叶子包围预检（沿用原有逻辑）
         if (isTrappedByLeaves(player)) {
             BlockPos leafTarget = findAdjacentLeaf(player);
@@ -495,9 +467,13 @@ public final class PhaseStoneAge implements Phase {
         // ============================================================
         // P1: 根据背包判断当前最需要什么资源（不依赖 currentTask，因为即将被覆盖）
         // Bug fix: 改为直接检查背包，而不是读取即将失效的 currentTask
+        // V5.44: 新增 WOOD_AGE 分支 — 无镐期一律砍树为先(没镐时去找石头挖不动是浪费)
         // ============================================================
         com.maohi.fakeplayer.ai.cognition.BiomePrior.ResourceType neededResource;
-        if (p.growthPhase == com.maohi.fakeplayer.GrowthPhase.STONE_AGE) {
+        if (p.growthPhase == com.maohi.fakeplayer.GrowthPhase.WOOD_AGE) {
+            // WOOD_AGE: 一定无任何镐,优先砍树合木镐
+            neededResource = com.maohi.fakeplayer.ai.cognition.BiomePrior.ResourceType.LOG;
+        } else if (p.growthPhase == com.maohi.fakeplayer.GrowthPhase.STONE_AGE) {
             // 检查背包里是否有足够木头（>=4 原木 ≈ 够做工具）
             net.minecraft.item.ItemStack mainHand = player.getMainHandStack();
             boolean hasPickaxe = !mainHand.isEmpty()

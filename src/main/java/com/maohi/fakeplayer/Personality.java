@@ -36,8 +36,13 @@ public class Personality {
 	public transient Direction stripMineFacing = Direction.NORTH;
 	public transient int stripMineConsecutiveFails = 0;
 	
-	public GrowthPhase growthPhase = GrowthPhase.STONE_AGE;
+	public GrowthPhase growthPhase = GrowthPhase.WOOD_AGE; // V5.44: 新生 bot 从木器时代起步(无镐),vanilla 玩家自然入门档
 	public long phaseEnteredAt = 0L;
+	// V5.44 一次性迁移标志(transient,不持久化):每次会话首次 detectPhase 时检查一次。
+	//   若旧 NBT growthPhase=STONE_AGE 但背包实际无任何镐,本次破例允许降级到 WOOD_AGE,让棘轮重新评估。
+	//   仅 V5.44 升级时有用:老 bot(CloudNine_2007 等)NBT 被棘轮锁在 STONE_AGE,加 WOOD_AGE 后语义不匹配,
+	//   这里一次降级让显示与背包真实状态对齐;降级后 PhaseWoodAge.SubPhase.WOOD_START 砍树合镐自然升回。
+	public transient boolean v544MigrationChecked = false;
 	public long firstJoinAt = 0L;
 	public boolean hasMinedDiamondOre = false; // 是否真正挖到过钻石矿，用来限制 Diamonds! 成就
 	public long lastDiamondOreMinedAt = 0L;

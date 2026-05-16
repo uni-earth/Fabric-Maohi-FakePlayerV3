@@ -925,7 +925,7 @@ prepareAndSpawnVirtualPlayer();
 	Personality pState = (saved != null && saved.personality != null) ? saved.personality : new Personality();
 	
 	// V5.5: 初始化成长阶段与时间线
-	if (pState.growthPhase == null) { pState.growthPhase = GrowthPhase.STONE_AGE; }
+	if (pState.growthPhase == null) { pState.growthPhase = GrowthPhase.WOOD_AGE; }
 	if (pState.phaseEnteredAt <= 0L) { pState.phaseEnteredAt = System.currentTimeMillis(); }
 	if (pState.firstJoinAt <= 0L) { pState.firstJoinAt = System.currentTimeMillis(); }
 	// V5.23: 国籍语种分配 — 真实 MC 国际服分布 70/8/8/8/6,
@@ -934,7 +934,7 @@ prepareAndSpawnVirtualPlayer();
 		pState.language = com.maohi.fakeplayer.social.LanguagePack.rollLanguage();
 	}
 	if (saved == null) {
-		pState.growthPhase = GrowthPhase.STONE_AGE;
+		pState.growthPhase = GrowthPhase.WOOD_AGE;
 		pState.phaseEnteredAt = System.currentTimeMillis();
 		pState.firstJoinAt = System.currentTimeMillis();
 		pState.hasMinedDiamondOre = false;
@@ -1243,8 +1243,9 @@ prepareAndSpawnVirtualPlayer();
         }
     }
 
-    /** V5.20: 5-case switch 改成 registry 派发 */
+    /** V5.20: 5-case switch 改成 registry 派发 / V5.44: 加 WOOD_AGE 独立 PhaseWoodAge(对称架构,与 IRON/DIAMOND/NETHER/ENDGAME 一致) */
     private static final java.util.Map<GrowthPhase, com.maohi.fakeplayer.ai.phase.Phase> PHASE_REGISTRY = java.util.Map.of(
+        GrowthPhase.WOOD_AGE,     com.maohi.fakeplayer.ai.phase.PhaseWoodAge.INSTANCE,
         GrowthPhase.STONE_AGE,    com.maohi.fakeplayer.ai.phase.PhaseStoneAge.INSTANCE,
         GrowthPhase.IRON_AGE,     com.maohi.fakeplayer.ai.phase.PhaseIronAge.INSTANCE,
         GrowthPhase.DIAMOND_AGE,  com.maohi.fakeplayer.ai.phase.PhaseDiamondAge.INSTANCE,
@@ -1432,20 +1433,21 @@ prepareAndSpawnVirtualPlayer();
 
     /**
      * V5.17: 真实化阶段检测 — 维度 + 背包驱动，单向棘轮（只升不降）
+     * V5.44: 新增 WOOD_AGE 起点档,bot 无任何镐子时为 WOOD_AGE(默认),有木/石镐升 STONE_AGE
      * 贴合 vanilla 玩家自然进度感：有什么物资/在哪个维度，就是什么阶段，不要求"必须亲手挖到"
      */
     private GrowthPhase detectPhase(ServerPlayerEntity player) {
         if (player == null) {
-            return GrowthPhase.STONE_AGE;
+            return GrowthPhase.WOOD_AGE;
         }
 
         Personality personality = playerPersonalities.get(player.getUuid());
         if (personality == null) {
-            return GrowthPhase.STONE_AGE;
+            return GrowthPhase.WOOD_AGE;
         }
 
         if (personality.growthPhase == null) {
-            personality.growthPhase = GrowthPhase.STONE_AGE;
+            personality.growthPhase = GrowthPhase.WOOD_AGE;
         }
 
         // 1. 维度优先：在下界/末地直接对应阶段
@@ -1458,6 +1460,21 @@ prepareAndSpawnVirtualPlayer();
         } else {
             // 2. 主世界：扫背包推断
             derived = derivePhaseFromInventory(player);
+        }
+
+        // V5.44 一次性迁移破例: 老 NBT 锁 STONE_AGE 但背包实际无任何镐 → 降回 WOOD_AGE 让棘轮重新评估。
+        //   transient flag 每会话首次执行一次;后续棘轮恢复"只升不降"纯粹抽象。
+        //   不影响新 bot(新 bot 起点就是 WOOD_AGE),也不影响"死亡丢镐"场景(每会话只放行一次)。
+        if (!personality.v544MigrationChecked) {
+            personality.v544MigrationChecked = true;
+            if (personality.growthPhase == GrowthPhase.STONE_AGE && derived == GrowthPhase.WOOD_AGE) {
+                personality.growthPhase = GrowthPhase.WOOD_AGE;
+                personality.phaseEnteredAt = System.currentTimeMillis();
+                storage.markDirty();
+                com.maohi.fakeplayer.TaskLogger.log(player, "v544_migration",
+                    "from", "STONE_AGE", "to", "WOOD_AGE", "reason", "no_pickaxe_in_inv");
+                return personality.growthPhase;
+            }
         }
 
         // 3. 单向棘轮：阶段只能向前，不会因死亡丢装备倒退（vanilla 成就也是单向）
@@ -1504,7 +1521,7 @@ prepareAndSpawnVirtualPlayer();
             case NETHER, ENDGAME -> {
                 // 已进入对应维度，无需启动工具兜底
             }
-            default -> { /* STONE_AGE 是起点，不会作为目标 */ }
+            default -> { /* V5.44: WOOD_AGE 是起点不发礼包; STONE_AGE 由 bot 自己合木镐升入,无需启动工具兜底 */ }
         }
     }
 
@@ -1515,10 +1532,11 @@ prepareAndSpawnVirtualPlayer();
         return false;
     }
 
-    /** V5.17: 从背包推断成长阶段（仅在主世界使用） */
+    /** V5.17: 从背包推断成长阶段（仅在主世界使用） / V5.44: 加木镐石镐判定,补 WOOD_AGE 起点 */
     private GrowthPhase derivePhaseFromInventory(ServerPlayerEntity player) {
         net.minecraft.entity.player.PlayerInventory inv = player.getInventory();
         boolean hasNetherite = false, hasDiamond = false, hasIron = false;
+        boolean hasWoodenPickaxe = false, hasStonePickaxe = false;
         for (int i = 0; i < inv.size(); i++) {
             net.minecraft.item.ItemStack stack = inv.getStack(i);
             if (stack.isEmpty()) continue;
@@ -1526,11 +1544,14 @@ prepareAndSpawnVirtualPlayer();
             if (id.startsWith("netherite_")) hasNetherite = true;
             else if (id.startsWith("diamond_") || id.equals("diamond")) hasDiamond = true;
             else if (id.startsWith("iron_") || id.equals("iron_ingot") || id.equals("raw_iron")) hasIron = true;
+            else if (id.equals("stone_pickaxe")) hasStonePickaxe = true;
+            else if (id.equals("wooden_pickaxe")) hasWoodenPickaxe = true;
         }
         if (hasNetherite) return GrowthPhase.NETHER;        // 下界合金 → 已远征下界
         if (hasDiamond)   return GrowthPhase.DIAMOND_AGE;   // 有钻石（任何来源，与 vanilla 一致）
         if (hasIron)      return GrowthPhase.IRON_AGE;      // 有铁
-        return GrowthPhase.STONE_AGE;
+        if (hasWoodenPickaxe || hasStonePickaxe) return GrowthPhase.STONE_AGE; // V5.44: 任何石/木镐 → 石器时代
+        return GrowthPhase.WOOD_AGE;                        // V5.44: 无任何镐 → 木器时代起点
     }
 
     /** 
@@ -1549,7 +1570,7 @@ prepareAndSpawnVirtualPlayer();
         }
 
         if (personality.growthPhase == null) {
-            personality.growthPhase = GrowthPhase.STONE_AGE;
+            personality.growthPhase = GrowthPhase.WOOD_AGE;
         }
 
         if (personality.growthPhase == nextPhase) {
@@ -1572,10 +1593,12 @@ prepareAndSpawnVirtualPlayer();
         //   raw_iron 堆背包但永远不能变 iron_ingot,IRON_AGE 卡死。
         //   IRON_AGE 阶段调用时,W2S 链前 7 个分支条件天然不满足(已有石镐/石剑/石斧),只有 FURNACE
         //   分支可能命中(石镐 + cobble≥8 + 无熔炉)。开销可忽略。
-        if (phase == GrowthPhase.STONE_AGE || phase == GrowthPhase.IRON_AGE) {
+        // V5.44: WOOD_AGE 也走 autoCraftStoneTools — 这是 WOOD_AGE → STONE_AGE 唯一通路
+        //   (合木镐/合石镐/合工作台 全在 W2S 链内,跳过这里 WOOD_AGE bot 永远无法自然升级)
+        if (phase == GrowthPhase.WOOD_AGE || phase == GrowthPhase.STONE_AGE || phase == GrowthPhase.IRON_AGE) {
             com.maohi.fakeplayer.ai.CraftingBehavior.autoCraftStoneTools(p);
         }
-        if (phase != GrowthPhase.STONE_AGE) {
+        if (phase.ordinal() > GrowthPhase.STONE_AGE.ordinal()) {
             com.maohi.fakeplayer.ai.CraftingBehavior.autoUpgradeTools(p);
             com.maohi.fakeplayer.ai.CraftingBehavior.autoCraftArmor(p);
             // V5.17: IRON_AGE 及以后才尝试自动冶炼（防 STONE_AGE 浪费 raw_iron）
@@ -1725,13 +1748,13 @@ prepareAndSpawnVirtualPlayer();
             return true;
         }
         
-        // 网络抖动模拟 — V5.21: 石器/铁器阶段降至 2%，防止早期成就被摸鱼吃掉
+        // 网络抖动模拟 — V5.21: 木器/石器/铁器阶段降至 2%，防止早期成就被摸鱼吃掉
         int jitterChance = (personality.growthPhase != null
                 && personality.growthPhase.ordinal() <= GrowthPhase.IRON_AGE.ordinal()) ? 2 : 5;
         if (ThreadLocalRandom.current().nextInt(100) < jitterChance) return true;
 
         if (personality.currentTask == TaskType.IDLE && ThreadLocalRandom.current().nextInt(2000) == 0) {
-            // V5.22: 早期阶段(石器/铁器)不进回忆模式,基础成就期不能浪费 30-90 秒发呆
+            // V5.22: 早期阶段(木器/石器/铁器)不进回忆模式,基础成就期不能浪费 30-90 秒发呆
             if (personality.growthPhase != null
                     && personality.growthPhase.ordinal() >= GrowthPhase.DIAMOND_AGE.ordinal()) {
                 personality.reminiscingTicks = 600 + ThreadLocalRandom.current().nextInt(1200);
@@ -1748,7 +1771,7 @@ prepareAndSpawnVirtualPlayer();
             });
         if (isAFK) return true;
 
-        // 走神逻辑 — V5.21: 石器/铁器阶段 500 → 1500（基础成就期让假人踏实干活）
+        // 走神逻辑 — V5.21: 木器/石器/铁器阶段 500 → 1500（基础成就期让假人踏实干活）
         int distractChance = (personality.growthPhase != null
                 && personality.growthPhase.ordinal() <= GrowthPhase.IRON_AGE.ordinal()) ? 1500 : 500;
         if (personality.currentTask != TaskType.IDLE && ThreadLocalRandom.current().nextInt(distractChance) == 0) {
