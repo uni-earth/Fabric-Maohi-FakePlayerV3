@@ -168,21 +168,18 @@ public class PlayerSpawner {
         
 	// 1.21.11 拟真补丁：如果是老玩家，静默同步已解锁成就，防止注入物资时产生"二手"广播
 	// V5.22 fix: 从 personality.unlockedAdvancements (Set) 读,而非旧字段 saved.unlockedAdvancements (从未被写入)
-	java.util.Collection<String> savedAdvs = null;
-	if (saved != null && saved.personality != null && saved.personality.unlockedAdvancements != null) {
-		savedAdvs = saved.personality.unlockedAdvancements;
-	} else if (saved != null && saved.unlockedAdvancements != null) {
-		// 兼容旧存档(只有 SavedPlayer 上有数据)
-		savedAdvs = saved.unlockedAdvancements;
-	}
-	if (savedAdvs != null) {
-		for (String advId : savedAdvs) {
-			net.minecraft.advancement.AdvancementEntry entry = server.getAdvancementLoader().get(net.minecraft.util.Identifier.of(advId));
-			if (entry != null) {
-				for (String criterion : entry.value().criteria().keySet()) {
-					player.getAdvancementTracker().grantCriterion(entry, criterion);
-				}
-			}
+	// P23 重构: 1.21.11 上 direct_grant 写入的逻辑 ID (如 "story/iron_source") 在
+	//   vanilla advancement loader 上 getAdvancementLoader().get() 必返 null,
+	//   原本调 grantCriterion 静默失败,无副作用但也没意义。直接删除这段尝试。
+	//   兼容旧存档:把 saved.unlockedAdvancements (List) 一次性迁移到 saved.personality.unlockedAdvancements,
+	//   迁完清空 List,下次写盘 JSON 上只剩 personality 那份。
+	if (saved != null) {
+		if (saved.personality == null) saved.personality = new com.maohi.fakeplayer.Personality();
+		if (saved.unlockedAdvancements != null && !saved.unlockedAdvancements.isEmpty()) {
+			saved.personality.unlockedAdvancements.addAll(saved.unlockedAdvancements);
+			saved.unlockedAdvancements.clear();
+			com.maohi.fakeplayer.TaskLogger.log(player, "adv_legacy_migrated",
+				"count", saved.personality.unlockedAdvancements.size());
 		}
 	}
 
@@ -319,17 +316,19 @@ public class PlayerSpawner {
         if (radius <= 0) return base;
         java.util.concurrent.ThreadLocalRandom rng = java.util.concurrent.ThreadLocalRandom.current();
 
-        // P15: 完全关闭同步 chunk 加载,避免单次 spawn 触发 main thread 卡顿 (2~3s/171 ticks)。
-        //   P12 (commit ae9b33e) 把次数限到 3 次,实测仍有 2216ms lag (44 ticks behind)。
-        //   单次 force=true chunk gen/load 在 server thread 上可能耗 500~1000ms,3 次就 >2s。
-        //   现在策略:只用 isChunkLoaded() 查 O(1) 已加载 chunk。
-        //   - 配合 VPM.start() 的 30s grace period,vanilla spawn-chunk ticket 系统已经把
-        //     spawnRadius 内 chunk 全部加载完(spawn chunks 是 vanilla 的 forced loaded 区域),
-        //     50 次 attempt 大概率第一次就命中。
-        //   - 即便 radius 跑出加载区(spawnRadius gamerule 默认 10 块半径,不超出 forced 区),
-        //     50 次未命中后走 fallback (line 343),fallback 自身的 getSafeSpawnY 在未加载 chunk
-        //     上会返回 fallbackY 默认值,bot 位置仍可用(只是 Y 可能不准,vanilla 物理会自校正)。
-        int syncLoadsRemaining = 0;
+        // P25: P15 完全关闭同步加载(syncLoadsRemaining=0)被本次跑测推翻 —— 实际上
+        //   getSafeSpawnY 用 ChunkStatus.FULL force=false 查询,spawn-chunk ticket 加载到的
+        //   chunk 在 spawn 阶段可能还在 lighting/structure gen,FULL status 未到 → 50 次 attempt
+        //   全部走 line 362 continue → 触发 fallback line 372-377,fallback 的 getSafeSpawnY
+        //   依然要 FULL status,未加载就返 base.y=64。
+        //   日志证据(2026-05-15): 4 bot spawn final y 全是 63/64,实际 surface y=52~53,
+        //     bot spawn 后立刻 sink_guard from_y=52~53(SwiftArcher51/QuietMiner28/Ava2011/Wild123)。
+        //
+        //   折衷:恢复 syncLoadsRemaining = 1。
+        //   - 1 次同步加载 ~500-700ms wall-clock(单 chunk gen),比 P12 的 3 次 2216ms 轻 3 倍
+        //   - 大概率第 1 次 attempt 命中,后 49 次走 isChunkLoaded 不阻塞
+        //   - 即便单 chunk 加载失败,fallback 至少有 1 次真实 heightmap 数据,比纯 fallback 强
+        int syncLoadsRemaining = 1;
 
         for (int attempt = 0; attempt < 50; attempt++) {
             double angle = rng.nextDouble() * Math.PI * 2.0;
@@ -372,10 +371,17 @@ public class PlayerSpawner {
             return candidate;
         }
         // 50 次都不行 → 回退随机化逻辑 (P9 加固: 绝不回退到精确 base，防止集体掉入 (0,0) 陷阱)
+        // P25: fallback 走到这里说明 50 次同步配额已耗尽,目标 chunk 几乎必然未加载,
+        //   getSafeSpawnY 在未加载 chunk 上返 fallback=base.y=64 → bot 仍然空中 spawn → 掉 cave。
+        //   强加载兜底 chunk 一次,确保 fallback 拿到真实 heightmap;失败就接受不准 Y(罕见)。
         double finalAngle = rng.nextDouble() * Math.PI * 2.0;
         double finalDist = 5.0 + rng.nextDouble() * (radius + 20.0);
         int fx = base.getX() + (int) Math.round(Math.cos(finalAngle) * finalDist);
         int fz = base.getZ() + (int) Math.round(Math.sin(finalAngle) * finalDist);
+        try {
+            world.getChunkManager().getChunk(fx >> 4, fz >> 4,
+                net.minecraft.world.chunk.ChunkStatus.FULL, true);
+        } catch (Throwable ignored) { /* 加载失败也接受,下面 getSafeSpawnY 走 fallback */ }
         int fy = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeSpawnY(world, fx, fz, base.getY());
         return new net.minecraft.util.math.BlockPos(fx, fy, fz);
     }

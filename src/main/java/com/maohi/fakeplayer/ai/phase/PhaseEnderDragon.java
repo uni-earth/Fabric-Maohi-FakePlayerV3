@@ -125,6 +125,28 @@ public final class PhaseEnderDragon implements Phase {
         // 周围全是虚空。任何 EXPLORING 任务都会让 bot 直线走出平台坠虚空死。
         // 没造桥能力时,锁 IDLE 60s,等会话到期或被 enderman 推下平台,胜过秒掉虚空。
         if (isOnEndSpawnPlatform(player)) {
+            // 尝试用末影珍珠传送到主岛 (0, 65, 0) 方向
+            int pearlSlot = findItemSlotInHotbar(player, net.minecraft.item.Items.ENDER_PEARL);
+            if (pearlSlot == -1) {
+                // hotbar 没珍珠，尝试从背包换过来
+                int anySlot = findItemSlotAnywhere(player, net.minecraft.item.Items.ENDER_PEARL);
+                if (anySlot != -1 && anySlot >= 9) {
+                    // swap 到 hotbar 0
+                    com.maohi.fakeplayer.network.InventoryActionHelper.clickSlot(
+                        player, anySlot, 0, net.minecraft.screen.slot.SlotActionType.SWAP);
+                    pearlSlot = 0;
+                }
+            }
+            if (pearlSlot != -1) {
+                com.maohi.fakeplayer.network.PacketHelper.setSelectedSlot(player, pearlSlot);
+                // 面朝主岛中心 (0, 65, 0)
+                smoothTurnYaw(player, computeYaw(player, new net.minecraft.util.math.Vec3d(0, 65, 0)));
+                // 设置俯仰角（珍珠需要抛物线，略微抬高）
+                player.setPitch(-20.0f);
+                com.maohi.fakeplayer.network.PacketHelper.useItem(player, net.minecraft.util.Hand.MAIN_HAND);
+                com.maohi.fakeplayer.network.PacketHelper.swingHand(player, net.minecraft.util.Hand.MAIN_HAND);
+            }
+            // 继续 IDLE 等待或者重试
             set(personality, player, TaskType.IDLE, player.getBlockPos(), TimingConstants.TICK_TIMEOUT_EXPLORE);
             return;
         }

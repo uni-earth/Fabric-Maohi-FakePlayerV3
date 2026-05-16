@@ -178,6 +178,8 @@ public final class CraftingBehavior {
 			if (id.startsWith("stone_pickaxe") && hasMaterial(inv, Items.IRON_INGOT, 3)) target = Items.IRON_PICKAXE;
 			else if (id.startsWith("iron_pickaxe") && hasMaterial(inv, Items.DIAMOND, 3)) target = Items.DIAMOND_PICKAXE;
 			else if (id.startsWith("stone_axe") && hasMaterial(inv, Items.IRON_INGOT, 3)) target = Items.IRON_AXE;
+			else if (id.startsWith("stone_sword") && hasMaterial(inv, Items.IRON_INGOT, 2)) target = Items.IRON_SWORD;
+			else if (id.startsWith("iron_sword") && hasMaterial(inv, Items.DIAMOND, 2)) target = Items.DIAMOND_SWORD;
 
 			if (target != null) {
 				if (findCraftingTable(player, 6) == null) return;
@@ -189,6 +191,133 @@ public final class CraftingBehavior {
 				pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
 				return;
 			}
+		}
+	}
+
+	/**
+	 * 自动合成盔甲 (V5.44 P2-B 阶段 2 补丁)
+	 */
+	public static void autoCraftArmor(ServerPlayerEntity player) {
+		com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(player);
+		if (pers == null || pers.currentTask == com.maohi.fakeplayer.TaskType.CRAFTING) return;
+		if (ThreadLocalRandom.current().nextInt(500) != 0) return;
+
+		PlayerInventory inv = player.getInventory();
+		if (inv.getEmptySlot() == -1) return; // 包满则不合防具
+
+		int ironCount = 0, diamondCount = 0;
+		for (int i = 0; i < inv.size(); i++) {
+			if (inv.getStack(i).isOf(Items.IRON_INGOT)) ironCount += inv.getStack(i).getCount();
+			if (inv.getStack(i).isOf(Items.DIAMOND)) diamondCount += inv.getStack(i).getCount();
+		}
+
+		if (ironCount < 4 && diamondCount < 4) return;
+
+		Item target = null;
+		
+		// 检查当前装备，缺哪个部位或者不够铁级，就优先合（胸腿头鞋）
+		ItemStack chest = player.getEquippedStack(net.minecraft.entity.EquipmentSlot.CHEST);
+		ItemStack legs = player.getEquippedStack(net.minecraft.entity.EquipmentSlot.LEGS);
+		ItemStack head = player.getEquippedStack(net.minecraft.entity.EquipmentSlot.HEAD);
+		ItemStack feet = player.getEquippedStack(net.minecraft.entity.EquipmentSlot.FEET);
+
+		boolean canDiamond = pers.growthPhase != null && pers.growthPhase.ordinal() >= com.maohi.fakeplayer.GrowthPhase.DIAMOND_AGE.ordinal();
+
+		if (canDiamond && (chest.isEmpty() || getArmorLevel(chest) < 3) && diamondCount >= 8) target = Items.DIAMOND_CHESTPLATE;
+		else if (canDiamond && (legs.isEmpty() || getArmorLevel(legs) < 3) && diamondCount >= 7) target = Items.DIAMOND_LEGGINGS;
+		else if (canDiamond && (head.isEmpty() || getArmorLevel(head) < 3) && diamondCount >= 5) target = Items.DIAMOND_HELMET;
+		else if (canDiamond && (feet.isEmpty() || getArmorLevel(feet) < 3) && diamondCount >= 4) target = Items.DIAMOND_BOOTS;
+		else if ((chest.isEmpty() || getArmorLevel(chest) < 2) && ironCount >= 8) target = Items.IRON_CHESTPLATE;
+		else if ((legs.isEmpty() || getArmorLevel(legs) < 2) && ironCount >= 7) target = Items.IRON_LEGGINGS;
+		else if ((head.isEmpty() || getArmorLevel(head) < 2) && ironCount >= 5) target = Items.IRON_HELMET;
+		else if ((feet.isEmpty() || getArmorLevel(feet) < 2) && ironCount >= 4) target = Items.IRON_BOOTS;
+
+		if (target != null) {
+			if (findCraftingTable(player, 6) == null) return;
+			pers.currentTask = com.maohi.fakeplayer.TaskType.CRAFTING;
+			pers.craftingTarget = target;
+			pers.craftingTicks = 60 + ThreadLocalRandom.current().nextInt(40);
+			pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
+			return;
+		}
+		
+		// P2-C 弓箭合成
+		autoCraftRangedGear(player, pers, inv);
+	}
+
+	private static void autoCraftRangedGear(ServerPlayerEntity player, com.maohi.fakeplayer.Personality pers, PlayerInventory inv) {
+		int stick = 0, string = 0, flint = 0, feather = 0, arrow = 0;
+		boolean hasBow = false;
+		for (int i = 0; i < inv.size(); i++) {
+			ItemStack s = inv.getStack(i);
+			if (s.isEmpty()) continue;
+			if (s.isOf(Items.STICK)) stick += s.getCount();
+			else if (s.isOf(Items.STRING)) string += s.getCount();
+			else if (s.isOf(Items.FLINT)) flint += s.getCount();
+			else if (s.isOf(Items.FEATHER)) feather += s.getCount();
+			else if (s.isOf(Items.ARROW)) arrow += s.getCount();
+			else if (s.isOf(Items.BOW)) hasBow = true;
+		}
+
+		Item target = null;
+		if (!hasBow && stick >= 3 && string >= 3) {
+			target = Items.BOW;
+		} else if (stick >= 1 && flint >= 1 && feather >= 1 && arrow < 16) {
+			target = Items.ARROW;
+		}
+
+		if (target != null) {
+			if (findCraftingTable(player, 6) == null) return;
+			pers.currentTask = com.maohi.fakeplayer.TaskType.CRAFTING;
+			pers.craftingTarget = target;
+			pers.craftingTicks = 60 + ThreadLocalRandom.current().nextInt(40);
+			pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
+		}
+	}
+
+	private static int getArmorLevel(ItemStack stack) {
+		if (stack.isEmpty()) return 0;
+		net.minecraft.item.Item item = stack.getItem();
+		if (item == Items.NETHERITE_HELMET || item == Items.NETHERITE_CHESTPLATE
+			|| item == Items.NETHERITE_LEGGINGS || item == Items.NETHERITE_BOOTS) return 4;
+		if (item == Items.DIAMOND_HELMET || item == Items.DIAMOND_CHESTPLATE
+			|| item == Items.DIAMOND_LEGGINGS || item == Items.DIAMOND_BOOTS) return 3;
+		if (item == Items.IRON_HELMET || item == Items.IRON_CHESTPLATE
+			|| item == Items.IRON_LEGGINGS || item == Items.IRON_BOOTS) return 2;
+		if (item == Items.CHAINMAIL_HELMET || item == Items.CHAINMAIL_CHESTPLATE
+			|| item == Items.CHAINMAIL_LEGGINGS || item == Items.CHAINMAIL_BOOTS) return 1;
+		if (item == Items.TURTLE_HELMET) return 2;
+		return 0;
+	}
+
+	public static void autoCraftNetherItems(ServerPlayerEntity player) {
+		com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(player);
+		if (pers == null || pers.currentTask == com.maohi.fakeplayer.TaskType.CRAFTING) return;
+		if (ThreadLocalRandom.current().nextInt(500) != 0) return;
+
+		PlayerInventory inv = player.getInventory();
+		int blazeRod = 0, blazePowder = 0, enderPearl = 0, enderEye = 0;
+		for (int i = 0; i < inv.size(); i++) {
+			ItemStack s = inv.getStack(i);
+			if (s.isEmpty()) continue;
+			if (s.isOf(Items.BLAZE_ROD)) blazeRod += s.getCount();
+			else if (s.isOf(Items.BLAZE_POWDER)) blazePowder += s.getCount();
+			else if (s.isOf(Items.ENDER_PEARL)) enderPearl += s.getCount();
+			else if (s.isOf(Items.ENDER_EYE)) enderEye += s.getCount();
+		}
+
+		Item target = null;
+		if (blazeRod >= 1 && blazePowder < 6) {
+			target = Items.BLAZE_POWDER;
+		} else if (blazePowder >= 1 && enderPearl >= 1 && enderEye < 12) {
+			target = Items.ENDER_EYE;
+		}
+
+		if (target != null) {
+			pers.currentTask = com.maohi.fakeplayer.TaskType.CRAFTING;
+			pers.craftingTarget = target;
+			pers.craftingTicks = 30 + ThreadLocalRandom.current().nextInt(20);
+			pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
 		}
 	}
 
@@ -243,7 +372,7 @@ public final class CraftingBehavior {
 		// V5.30 W2S: CRAFTING_TABLE, OAK_PLANKS, STICK 走背包内 2×2 合成
 		// V5.42.4 严重修复: WOODEN_PICKAXE 是 3x3 配方, 必须在工作台合。
 		//   之前把它放进背包合, 导致假人尝试把材料往【盔甲槽】里塞, 逻辑彻底崩坏。
-		if (target == Items.CRAFTING_TABLE || target == Items.OAK_PLANKS || target == Items.STICK) {
+		if (target == Items.CRAFTING_TABLE || target == Items.OAK_PLANKS || target == Items.STICK || target == Items.BLAZE_POWDER || target == Items.ENDER_EYE) {
 			executeInInventoryCraft(player, target, recipe);
 			return;
 		}
@@ -356,6 +485,55 @@ public final class CraftingBehavior {
 		com.maohi.fakeplayer.TaskLogger.log(player, "craft_done",
 			"target", net.minecraft.registry.Registries.ITEM.getId(target).getPath(),
 			"workbench", workbench);
+
+		// P22 direct grant:绕过 vanilla advancement,craft 完关键工具直接记账。
+		grantCraftMilestone(player, target);
+	}
+
+	/**
+	 * P22 direct grant 兜底:fake player 1.21.11 上 vanilla criterion 不触发,
+	 * 直接在 craft_done 事件层 add personality.unlockedAdvancements + countAchievementUnlocked。
+	 * Set.add 自带去重,首次成功才计数。两类目标:
+	 *   - WOODEN_PICKAXE / 任意石器(石镐/石剑/石斧)→ story/upgrade_tools (第二档)
+	 *   - 任意铁器 → story/acquire_iron(若已扩进 ADV_SEQUENCE)/否则映射 story/upgrade_tools
+	 */
+	private static void grantCraftMilestone(ServerPlayerEntity player, Item target) {
+		com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(player);
+		if (pers == null) return;
+		String advId = null;
+		if (target == Items.WOODEN_PICKAXE || target == Items.STONE_PICKAXE
+			|| target == Items.STONE_SWORD || target == Items.STONE_AXE) {
+			advId = "story/upgrade_tools";
+		} else if (target == Items.IRON_PICKAXE || target == Items.IRON_SWORD
+			|| target == Items.IRON_AXE) {
+			advId = "story/acquire_iron";
+		} else if (target == Items.DIAMOND_PICKAXE || target == Items.DIAMOND_SWORD) {
+			// vanilla: story/mine_diamond（获取钻石）,这里用它标记钻石级合成里程碑
+			advId = "story/mine_diamond";
+		} else if (target == Items.IRON_CHESTPLATE || target == Items.DIAMOND_CHESTPLATE) {
+			// vanilla: story/obtain_armor（穿上铁甲级防具）
+			advId = "story/obtain_armor";
+		} else if (target == Items.BOW) {
+			// 自定义 milestone:vanilla 没有弓合成专属成就,用独立 ID 追踪
+			advId = "story/craft_bow";
+		}
+
+		if (advId != null && pers.unlockedAdvancements.add(advId)) {
+			pers.hasUnlockedThisSession = true;
+			com.maohi.fakeplayer.TaskLogger.log(player, "achievement_unlocked",
+				"id", advId, "via", "direct_grant",
+				"trigger", net.minecraft.registry.Registries.ITEM.getId(target).getPath());
+			com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(player.getUuid());
+			// P23 fix: 立即 markDirty,防止 60s auto-save 窗口崩溃丢失新解锁记录
+			com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
+			if (mgr != null) mgr.markStorageDirty();
+		}
+
+		// P22 vanilla 官方 Criteria.INVENTORY_CHANGED trigger:让 vanilla advancement 系统
+		//   重新扫 inventory 检查所有依赖 INVENTORY_CHANGED 的 advancement(upgrade_tools/acquire_iron/...)。
+		//   与 mine_done 路径一致,反射兼容多 yarn build。direct_grant 已经把 metrics 加上了,
+		//   这里是 bonus 让 vanilla advancement toast / advancement 面板也亮起,真人服观感一致。
+		com.maohi.fakeplayer.VirtualPlayerManager.invokeCriteriaTrigger(player, "INVENTORY_CHANGED");
 	}
 
 	/**
@@ -464,6 +642,62 @@ public final class CraftingBehavior {
 		if (target == Items.STONE_SWORD) return List.of(
 			new Placement(Items.COBBLESTONE, 2), new Placement(Items.COBBLESTONE, 5),
 			new Placement(Items.STICK, 8));
+		if (target == Items.IRON_SWORD) return List.of(
+			new Placement(Items.IRON_INGOT, 2), new Placement(Items.IRON_INGOT, 5),
+			new Placement(Items.STICK, 8));
+		if (target == Items.DIAMOND_SWORD) return List.of(
+			new Placement(Items.DIAMOND, 2), new Placement(Items.DIAMOND, 5),
+			new Placement(Items.STICK, 8));
+
+		if (target == Items.IRON_HELMET) return List.of(
+			new Placement(Items.IRON_INGOT, 1), new Placement(Items.IRON_INGOT, 2),
+			new Placement(Items.IRON_INGOT, 3), new Placement(Items.IRON_INGOT, 4),
+			new Placement(Items.IRON_INGOT, 6));
+		if (target == Items.IRON_CHESTPLATE) return List.of(
+			new Placement(Items.IRON_INGOT, 1), new Placement(Items.IRON_INGOT, 3),
+			new Placement(Items.IRON_INGOT, 4), new Placement(Items.IRON_INGOT, 5),
+			new Placement(Items.IRON_INGOT, 6), new Placement(Items.IRON_INGOT, 7),
+			new Placement(Items.IRON_INGOT, 8), new Placement(Items.IRON_INGOT, 9));
+		if (target == Items.IRON_LEGGINGS) return List.of(
+			new Placement(Items.IRON_INGOT, 1), new Placement(Items.IRON_INGOT, 2),
+			new Placement(Items.IRON_INGOT, 3), new Placement(Items.IRON_INGOT, 4),
+			new Placement(Items.IRON_INGOT, 6), new Placement(Items.IRON_INGOT, 7),
+			new Placement(Items.IRON_INGOT, 9));
+		if (target == Items.IRON_BOOTS) return List.of(
+			new Placement(Items.IRON_INGOT, 1), new Placement(Items.IRON_INGOT, 3),
+			new Placement(Items.IRON_INGOT, 4), new Placement(Items.IRON_INGOT, 6));
+
+		if (target == Items.DIAMOND_HELMET) return List.of(
+			new Placement(Items.DIAMOND, 1), new Placement(Items.DIAMOND, 2),
+			new Placement(Items.DIAMOND, 3), new Placement(Items.DIAMOND, 4),
+			new Placement(Items.DIAMOND, 6));
+		if (target == Items.DIAMOND_CHESTPLATE) return List.of(
+			new Placement(Items.DIAMOND, 1), new Placement(Items.DIAMOND, 3),
+			new Placement(Items.DIAMOND, 4), new Placement(Items.DIAMOND, 5),
+			new Placement(Items.DIAMOND, 6), new Placement(Items.DIAMOND, 7),
+			new Placement(Items.DIAMOND, 8), new Placement(Items.DIAMOND, 9));
+		if (target == Items.DIAMOND_LEGGINGS) return List.of(
+			new Placement(Items.DIAMOND, 1), new Placement(Items.DIAMOND, 2),
+			new Placement(Items.DIAMOND, 3), new Placement(Items.DIAMOND, 4),
+			new Placement(Items.DIAMOND, 6), new Placement(Items.DIAMOND, 7),
+			new Placement(Items.DIAMOND, 9));
+		if (target == Items.DIAMOND_BOOTS) return List.of(
+			new Placement(Items.DIAMOND, 1), new Placement(Items.DIAMOND, 3),
+			new Placement(Items.DIAMOND, 4), new Placement(Items.DIAMOND, 6));
+
+			// vanilla 弓配方 (可镜像): String|Stick|. / String|.|Stick / String|Stick|.
+		if (target == Items.BOW) return List.of(
+			new Placement(Items.STRING, 1), new Placement(Items.STICK, 2),
+			new Placement(Items.STRING, 4), new Placement(Items.STICK, 6),
+			new Placement(Items.STRING, 7), new Placement(Items.STICK, 8));
+
+		if (target == Items.ARROW) return List.of(
+			new Placement(Items.FLINT, 2), new Placement(Items.STICK, 5),
+			new Placement(Items.FEATHER, 8));
+		if (target == Items.BLAZE_POWDER) return List.of(
+			new Placement(Items.BLAZE_ROD, 1));
+		if (target == Items.ENDER_EYE) return List.of(
+			new Placement(Items.BLAZE_POWDER, 1), new Placement(Items.ENDER_PEARL, 2));
 		// V5.30 W2S 收尾:8 cobble 围中空 → FURNACE。slot 5 留空。
 		// findItemSlot(COBBLESTONE) 已扩展为接受 cobblestone / cobbled_deepslate 任一,
 		// 与 autoCraftStoneTools 里 cobbleCount 同时计两种保持一致。

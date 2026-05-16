@@ -70,25 +70,142 @@ public final class AchievementSimulator {
 		if (server == null || p == null || personality == null) return 0;
 
 		java.util.Collection<AdvancementEntry> allAdvs = enumerateLoader(server);
-		if (allAdvs == null || allAdvs.isEmpty()) return 0;
-
 		int newlyObserved = 0;
-		for (AdvancementEntry entry : allAdvs) {
-			String advId = entry.id().toString();
 
-			// 过滤 recipe 类(display=empty):不统计 "minecraft:recipes/..." 这类自动解锁的非成就 advancement
-			if (entry.value().display().isEmpty()) continue;
+		if (allAdvs != null && !allAdvs.isEmpty()) {
+			for (AdvancementEntry entry : allAdvs) {
+				String advId = entry.id().toString();
 
-			if (personality.unlockedAdvancements.contains(advId)) continue;
-			if (!p.getAdvancementTracker().getProgress(entry).isDone()) continue;
+				// 过滤 recipe 类(display=empty):不统计 "minecraft:recipes/..." 这类自动解锁的非成就 advancement
+				if (entry.value().display().isEmpty()) continue;
 
-			personality.unlockedAdvancements.add(advId);
-			personality.hasUnlockedThisSession = true;
-			newlyObserved++;
-			com.maohi.fakeplayer.TaskLogger.log(p, "achievement_unlocked", "id", advId);
-			com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(p.getUuid());
+				if (personality.unlockedAdvancements.contains(advId)) continue;
+				if (!p.getAdvancementTracker().getProgress(entry).isDone()) continue;
+
+				personality.unlockedAdvancements.add(advId);
+				personality.hasUnlockedThisSession = true;
+				newlyObserved++;
+				com.maohi.fakeplayer.TaskLogger.log(p, "achievement_unlocked", "id", advId);
+				com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(p.getUuid());
+			}
 		}
+
+		// P23 行为观察补救:vanilla criterion 对 fake player 不可靠,但 ServerStatHandler 在
+		//   onPlayerAction / onPlayerInteractEntity 内部 incrementStat,fake player 走我们的
+		//   发包路径同样累积。用 stat 阈值作为"实事求是"补救入口,Set.add 去重保证只记一次。
+		newlyObserved += observeStatMilestones(p, personality);
+		newlyObserved += observeDimension(p, personality);
+
 		return newlyObserved;
+	}
+
+	/**
+	 * P23: 用 ServerStatHandler 观察击杀 / 睡床 / 食物等 stat,达阈值即 direct_grant。
+	 * 反射拿 Stats 静态字段避免编译期类型耦合(yarn build 间 method/field 漂移)。
+	 */
+	private static int observeStatMilestones(ServerPlayerEntity p, Personality personality) {
+		int newCount = 0;
+		try {
+			net.minecraft.stat.ServerStatHandler stats = p.getStatHandler();
+			if (stats == null) return 0;
+
+			// 击杀任意生物 → adventure/kill_a_mob
+			if (!personality.unlockedAdvancements.contains("adventure/kill_a_mob")) {
+				int mobKills = stats.getStat(net.minecraft.stat.Stats.CUSTOM.getOrCreateStat(net.minecraft.stat.Stats.MOB_KILLS));
+				if (mobKills > 0) newCount += grantOne(p, personality, "adventure/kill_a_mob", "stat:mob_kills");
+			}
+			// 睡床 → adventure/sleep_in_a_bed
+			if (!personality.unlockedAdvancements.contains("adventure/sleep_in_a_bed")) {
+				int slept = stats.getStat(net.minecraft.stat.Stats.CUSTOM.getOrCreateStat(net.minecraft.stat.Stats.SLEEP_IN_BED));
+				if (slept > 0) newCount += grantOne(p, personality, "adventure/sleep_in_a_bed", "stat:sleep_in_bed");
+			}
+			// 跳跃过任意次 → 一个非里程碑用作"鲜活度"标记,但 vanilla 没成就对应,跳过
+			// 鱼上钩 → husbandry/fishy_business
+			if (!personality.unlockedAdvancements.contains("husbandry/fishy_business")) {
+				int fish = stats.getStat(net.minecraft.stat.Stats.CUSTOM.getOrCreateStat(net.minecraft.stat.Stats.FISH_CAUGHT));
+				if (fish > 0) newCount += grantOne(p, personality, "husbandry/fishy_business", "stat:fish_caught");
+			}
+			// 击杀 player → adventure/kill_player(PVP 假人 sparring 触发)
+			if (!personality.unlockedAdvancements.contains("adventure/kill_player")) {
+				int pk = stats.getStat(net.minecraft.stat.Stats.CUSTOM.getOrCreateStat(net.minecraft.stat.Stats.PLAYER_KILLS));
+				if (pk > 0) newCount += grantOne(p, personality, "adventure/kill_player", "stat:player_kills");
+			}
+			// 受伤(被打) → adventure/take_a_hit (非里程碑但 vanilla 有)
+			if (!personality.unlockedAdvancements.contains("adventure/take_a_hit")) {
+				int dmgTaken = stats.getStat(net.minecraft.stat.Stats.CUSTOM.getOrCreateStat(net.minecraft.stat.Stats.DAMAGE_TAKEN));
+				if (dmgTaken > 0) newCount += grantOne(p, personality, "adventure/take_a_hit", "stat:damage_taken");
+			}
+			// 死亡过 → adventure/very_very_frightening (vanilla 没直接 stat-only 成就,用 deaths 作 metric 观测)
+			if (!personality.unlockedAdvancements.contains("end/respawn_anchor")) {
+				// 占位:end 系列实际需要专门触发,跳过
+			}
+			// 食物 use 次数总和(任意食物吃过 → husbandry/eat_meat 系列粗略合并)
+			if (!personality.unlockedAdvancements.contains("husbandry/balanced_diet")) {
+				// USED stat 是 per-item,我们只挑常见食物 sum,>0 即视为 bot 已吃过东西
+				int eaten = 0;
+				net.minecraft.item.Item[] commonFoods = {
+					net.minecraft.item.Items.BREAD, net.minecraft.item.Items.APPLE,
+					net.minecraft.item.Items.COOKED_BEEF, net.minecraft.item.Items.COOKED_PORKCHOP,
+					net.minecraft.item.Items.COOKED_CHICKEN, net.minecraft.item.Items.COOKED_MUTTON,
+					net.minecraft.item.Items.COOKED_RABBIT, net.minecraft.item.Items.COOKED_COD,
+					net.minecraft.item.Items.COOKED_SALMON, net.minecraft.item.Items.CARROT,
+					net.minecraft.item.Items.POTATO, net.minecraft.item.Items.BAKED_POTATO,
+					net.minecraft.item.Items.BEETROOT, net.minecraft.item.Items.BEEF,
+					net.minecraft.item.Items.PORKCHOP, net.minecraft.item.Items.CHICKEN,
+					net.minecraft.item.Items.MUTTON, net.minecraft.item.Items.RABBIT,
+					net.minecraft.item.Items.COD, net.minecraft.item.Items.SALMON
+				};
+				for (net.minecraft.item.Item food : commonFoods) {
+					eaten += stats.getStat(net.minecraft.stat.Stats.USED.getOrCreateStat(food));
+					if (eaten > 0) break;
+				}
+				if (eaten > 0) newCount += grantOne(p, personality, "husbandry/eat_food", "stat:food_used");
+			}
+		} catch (Throwable t) {
+			// 防御:某 yarn build stat 字段不存在 → 静默跳过观察,主流程不受影响
+			com.maohi.fakeplayer.TaskLogger.log(p, "stat_observe_fail",
+				"error", t.getClass().getSimpleName() + ":" + t.getMessage());
+		}
+		return newCount;
+	}
+
+	/**
+	 * P23: 观察 bot 所在维度,进 nether/end 即视为对应里程碑达成。
+	 * 每 30s 扫一次性能可控;Set.add 去重,玩家长期在 nether 也只记一次。
+	 */
+	private static int observeDimension(ServerPlayerEntity p, Personality personality) {
+		int newCount = 0;
+		try {
+			net.minecraft.registry.RegistryKey<net.minecraft.world.World> dim = p.getEntityWorld().getRegistryKey();
+			if (dim.equals(net.minecraft.world.World.NETHER)) {
+				if (!personality.unlockedAdvancements.contains("story/enter_the_nether")) {
+					newCount += grantOne(p, personality, "story/enter_the_nether", "dim:nether");
+				}
+			} else if (dim.equals(net.minecraft.world.World.END)) {
+				if (!personality.unlockedAdvancements.contains("story/enter_the_end")) {
+					newCount += grantOne(p, personality, "story/enter_the_end", "dim:end");
+				}
+			}
+		} catch (Throwable t) {
+			com.maohi.fakeplayer.TaskLogger.log(p, "dim_observe_fail",
+				"error", t.getClass().getSimpleName() + ":" + t.getMessage());
+		}
+		return newCount;
+	}
+
+	/**
+	 * P23: 共用 direct_grant 单点入口(Set.add + log + metrics + markDirty)。
+	 * 返回 1 表示首次解锁(供 syncFromVanilla 累计 newlyObserved),0 表示重复跳过。
+	 */
+	private static int grantOne(ServerPlayerEntity p, Personality personality, String advId, String trigger) {
+		if (!personality.unlockedAdvancements.add(advId)) return 0;
+		personality.hasUnlockedThisSession = true;
+		com.maohi.fakeplayer.TaskLogger.log(p, "achievement_unlocked",
+			"id", advId, "via", "behavior_observe", "trigger", trigger);
+		com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(p.getUuid());
+		com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
+		if (mgr != null) mgr.markStorageDirty();
+		return 1;
 	}
 
 	/**
@@ -99,43 +216,114 @@ public final class AchievementSimulator {
 		return enumerateLoader(server);
 	}
 
+	// 一次性诊断 dump 节流:第一次 enumerateLoader 被调用时,输出真实路径 + 头 20 个 advancement id,
+	//   一行就够,之后跑无关 ach 业务时静默。
+	private static final java.util.concurrent.atomic.AtomicBoolean ENUMERATE_DUMPED =
+		new java.util.concurrent.atomic.AtomicBoolean(false);
+
 	/**
 	 * 反射 + cast 拿 loader 所有 advancement,兼容多 yarn build。
-	 * 优先 getAdvancements / getAll 几种 method name,
-	 * 都失败则 fallback 用 Identifier.of(adv) 一个个查 ADV_SEQUENCE。
+	 *
+	 * P22 三段兜底:
+	 *   1) method reflection: getAdvancements / getAll / values / entries / iterator
+	 *   2) field reflection: 找 loader 内部 Map<Identifier, AdvancementEntry> 字段,取 values()
+	 *   3) ADV_SEQUENCE hardcoded fallback(只剩 5 档 milestone,不含 mine_wood)
+	 *
+	 * 配合一次性 dump 输出真实走的是哪条路径 + loader 内含哪些 ID。
 	 */
 	@SuppressWarnings("unchecked")
 	private static java.util.Collection<AdvancementEntry> enumerateLoader(MinecraftServer server) {
 		Object loader = server.getAdvancementLoader();
-		for (String m : new String[]{"getAdvancements", "getAll"}) {
+		String loaderClassName = loader.getClass().getName();
+		java.util.Collection<AdvancementEntry> result = null;
+		String diagPath = "none";
+		String diagErr = null;
+
+		// 1) method reflection
+		for (String m : new String[]{"getAdvancements", "getAll", "values", "entries", "iterator", "getAdvancementEntries"}) {
 			try {
 				java.lang.reflect.Method method = loader.getClass().getMethod(m);
-				Object result = method.invoke(loader);
-				if (result instanceof java.util.Collection<?> c) {
-					return (java.util.Collection<AdvancementEntry>) c;
+				Object res = method.invoke(loader);
+				if (res instanceof java.util.Collection<?> c && !c.isEmpty()) {
+					// 验证 element 类型 — 防止 method 同名但返回 Map.entrySet 等
+					Object first = c.iterator().next();
+					if (first instanceof AdvancementEntry) {
+						result = (java.util.Collection<AdvancementEntry>) c;
+						diagPath = "method:" + m;
+						break;
+					}
 				}
-				if (result instanceof Iterable<?> it) {
+				if (res instanceof Iterable<?> it) {
 					java.util.List<AdvancementEntry> list = new java.util.ArrayList<>();
 					for (Object o : it) {
 						if (o instanceof AdvancementEntry e) list.add(e);
 					}
-					return list;
+					if (!list.isEmpty()) {
+						result = list;
+						diagPath = "method-iter:" + m;
+						break;
+					}
 				}
 			} catch (NoSuchMethodException ignored) {
 			} catch (Throwable t) {
-				// 反射调用本身失败 — 单次 try 下一个 method name
+				diagErr = m + "→" + t.getClass().getSimpleName();
 			}
 		}
-		// fallback:用 ADV_SEQUENCE 硬编码 list 凑一份(可能丢 vanilla 后续新增 advancement,
-		// 但 mine_wood/mine_stone/upgrade_tools 6 档里程碑保证能查)
-		java.util.List<AdvancementEntry> fallback = new java.util.ArrayList<>();
-		for (String id : ADV_SEQUENCE) {
-			try {
-				AdvancementEntry e = server.getAdvancementLoader().get(Identifier.of(id));
-				if (e != null) fallback.add(e);
-			} catch (Throwable ignored) {}
+
+		// 2) field reflection 兜底:在 loader 类及其父类里找 Map<Identifier, AdvancementEntry> 字段
+		if (result == null) {
+			Class<?> klass = loader.getClass();
+			outer:
+			while (klass != null && klass != Object.class) {
+				for (java.lang.reflect.Field f : klass.getDeclaredFields()) {
+					if (!java.util.Map.class.isAssignableFrom(f.getType())) continue;
+					try {
+						f.setAccessible(true);
+						Object obj = f.get(loader);
+						if (!(obj instanceof java.util.Map<?, ?> m)) continue;
+						if (m.isEmpty()) continue;
+						// 验证 value 是 AdvancementEntry
+						Object firstVal = m.values().iterator().next();
+						if (firstVal instanceof AdvancementEntry) {
+							result = (java.util.Collection<AdvancementEntry>)(Object) m.values();
+							diagPath = "field:" + f.getName();
+							break outer;
+						}
+					} catch (Throwable t) {
+						diagErr = "field-" + f.getName() + "→" + t.getClass().getSimpleName();
+					}
+				}
+				klass = klass.getSuperclass();
+			}
 		}
-		return fallback;
+
+		// 3) ADV_SEQUENCE hardcoded fallback
+		if (result == null || result.isEmpty()) {
+			java.util.List<AdvancementEntry> fallback = new java.util.ArrayList<>();
+			for (String id : ADV_SEQUENCE) {
+				try {
+					AdvancementEntry e = server.getAdvancementLoader().get(Identifier.of(id));
+					if (e != null) fallback.add(e);
+				} catch (Throwable ignored) {}
+			}
+			result = fallback;
+			diagPath = "hardcoded_fallback";
+		}
+
+		// 一次性 dump:loader 实际 class 名 + 走的路径 + 头 30 个 advancement id
+		if (ENUMERATE_DUMPED.compareAndSet(false, true)) {
+			java.util.List<String> sample = new java.util.ArrayList<>();
+			int count = 0;
+			for (AdvancementEntry e : result) {
+				sample.add(e.id().toString());
+				if (++count >= 30) break;
+			}
+			org.slf4j.LoggerFactory.getLogger("Server thread").info(
+				"[MaohiTask] enumerate_loader_dump loaderClass={} path={} err={} size={} sample={}",
+				loaderClassName, diagPath, diagErr, result.size(), sample);
+		}
+
+		return result;
 	}
 
 	/**

@@ -16,6 +16,14 @@ public class SavedPlayer {
 	public volatile String name;
 	public volatile Personality personality;
 	public volatile long totalPlaytime;
+	/**
+	 * @deprecated P23: 这个外层 List 从未被任何写入路径写过(grep 全工程仅有读 + 兜底 new 空)。
+	 *   成就记录单一权威已经迁移到 {@link Personality#unlockedAdvancements} Set。
+	 *   保留字段是为了 Gson 反序列化旧存档时不报错;VPM.start() 一次性把它的内容并入
+	 *   personality.unlockedAdvancements 后清空(参见 VirtualPlayerManager.loadData 后兜底块)。
+	 *   不要再用这个字段做任何业务判断。
+	 */
+	@Deprecated
 	public java.util.List<String> unlockedAdvancements = new java.util.ArrayList<>();
 
 	public SavedPlayer() {} // 2.78 Gson 兼容构造

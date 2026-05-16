@@ -185,6 +185,9 @@ public class MovementController {
 		//   日志证据(commit 7648837):DragonGhost target=(13,80,5) 站 (0.5,64,0.5),
 		//     xz²≈170 走到 (13,64,5) 时 xz²=0 直接算到达 → stopMovement → 8 分钟 7 次 fail。
 		//   阈值 3.0 容忍正常 1-3 格高差(vanilla 跳 1 格 + 短爬坡),> 3 视为不可达。
+		// P25: 阈值 3.0 → 4.0。背景:配合 isDangerAhead fall+HP 放宽,bot 现在可以无伤跳 3 格 +
+		//   有血时跳 4 格。到达阈值同步放到 4 让 bot 在 target 上方 4 格(山坡 + 4 格悬崖)算到达,
+		//   后续 vanilla 重力 + EatingBehavior 兜底自然下降到 target。
 		double dx = target.getX() + 0.5 - pos.x;
 		double dz = target.getZ() + 0.5 - pos.z;
 		double dy = target.getY() + 0.5 - pos.y;
@@ -193,7 +196,7 @@ public class MovementController {
 		//   永远 distSq > 2.25 → 60s expired,bot 站在目标 1.8 格远但算"未到达"。
 		//   2 格半径仍在 vanilla reach 4.5 内,允许 mine_start;不会让 bot 5 格远就算到达。
 		double distSq = dx * dx + dz * dz;
-		if (distSq <= 4.0 && Math.abs(dy) <= 3.0) { stopMovement(p); return true; }
+		if (distSq <= 4.0 && Math.abs(dy) <= 4.0) { stopMovement(p); return true; }
 
 		// planA P-1 诊断:每 30s 节流一条 move_diag,看 bot 是不是真的在挪动。
 		//   核心指标:30s 内 bot 是否朝 target 靠近(对比上次采样位置)。
@@ -254,7 +257,63 @@ public class MovementController {
 				//   wall-clock 不>10000 → cooldownOk=false 误失败)。
 				boolean cooldownOk = nowMs - pers.lastStuckTeleportAt > 6_000L;
 				boolean noObserver = !hasNearbyRealObserver(p, world, 32);
+
+				// P24: 连续 sink_guard 计数管理。距上次触发 >60s 视为 bot 真出过 cave,归零计数。
+				if (nowMs - pers.sinkGuardLastFireAt > 60_000L) {
+					pers.sinkGuardConsecutiveCount = 0;
+				}
+
 				if (cooldownOk && noObserver) {
+					// P24: 连续 sink_guard >=3 次 → 整个 spawn region 都是 cave,就地 surfaceY 救援无用。
+					//   强制远征 teleport 到 500-1500 格外随机点,大概率落到完全不同的 biome/地形。
+					//   日志证据(09:07~09:13): 5 bot 6 分钟反复 sink_guard 60+ 次,yaw 已覆盖 360°,
+					//     bot 全 0 mined。说明 spawn 周围方圆几十格都是 cave 海,就地救没用。
+					//   远征跨度 500-1500 格 = 30+ chunk,触发 chunk gen 主线程负载,但比死循环可接受。
+					if (pers.sinkGuardConsecutiveCount >= 3) {
+						double angle = ThreadLocalRandom.current().nextDouble(0, 2 * Math.PI);
+						double dist = 500.0 + ThreadLocalRandom.current().nextDouble(0, 1000.0);
+						int farX = (int) (pos.x + Math.cos(angle) * dist);
+						int farZ = (int) (pos.z + Math.sin(angle) * dist);
+						// P25: 远征落点强加载 chunk,否则 getSafeTopY 在未加载 chunk 上返 fallback=80,
+						//   bot teleport 到 y=81 实际地表 y=63 → 空中卡死(假人没 client tick 不会自由落体)。
+						//   日志证据(2026-05-15): SwiftArcher51 远征 to=(268,81,-637)、Ava2011 to=(1331,81,-344)、
+						//     Wild123 to=(-1088,81,595) 全部 y=81 fallback,后续 stuck_no_surface +
+						//     4 分钟 0 移动,最终 stuck_kick。
+						//   单 chunk 强加载 ~500-1000ms 主线程,可接受:
+						//     - 远征本身是连续 3 次 sink_guard 后的兜底中的兜底
+						//     - 已有 lagFreezeUntil = 15s 缓冲(下方)
+						//     - 加载失败也接受不准 Y(getSafeTopY 自带 fallback)
+						try {
+							world.getChunkManager().getChunk(farX >> 4, farZ >> 4,
+								net.minecraft.world.chunk.ChunkStatus.FULL, true);
+						} catch (Throwable ignored) { /* 加载失败也接受 fallback */ }
+						int farSurfaceY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
+							world, farX, farZ, 80);
+						double newY = farSurfaceY + 1.0;
+						float newYaw = ThreadLocalRandom.current().nextFloat() * 360f - 180f;
+						p.refreshPositionAndAngles(farX + 0.5, newY, farZ + 0.5, newYaw, p.getPitch());
+						pers.lastStuckTeleportAt = nowMs;
+						pers.stuckEscalation = 2;
+						pers.stuckTicks = 0;
+						pers.lagFreezeUntil = nowMs + 15_000L; // 远征跨 chunk lag 大,freeze 15s
+						pers.heightFloorY = newY - 10.0; // 重锚 floor 到新位置
+						pers.sinkGuardConsecutiveCount = 0; // 远征后重置
+						pers.sinkGuardLastFireAt = nowMs;
+						if (target != null) {
+							pers.failedTargets.put(target, nowMs + 60_000L);
+							com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
+						}
+						pers.currentTask = com.maohi.fakeplayer.TaskType.IDLE;
+						pers.taskTarget = null;
+						pers.currentPath.clear();
+						com.maohi.fakeplayer.TaskLogger.log(p, "sink_guard_far_teleport",
+							"from", String.format("(%.1f,%.1f,%.1f)", pos.x, pos.y, pos.z),
+							"to", String.format("(%d,%.1f,%d)", farX, newY, farZ),
+							"dist", String.format("%.0f", dist),
+							"consecutive", 3);
+						stopMovement(p);
+						return true;
+					}
 					BlockPos botPos = p.getBlockPos();
 					int surfaceY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
 						world, botPos.getX(), botPos.getZ(), Integer.MIN_VALUE);
@@ -270,6 +329,9 @@ public class MovementController {
 							pers.stuckEscalation = 2;
 							pers.stuckTicks = 0;
 							pers.lagFreezeUntil = nowMs + 8_000L;
+							// P24: 累加连续计数,达 3 次下次走远征路径
+							pers.sinkGuardConsecutiveCount++;
+							pers.sinkGuardLastFireAt = nowMs;
 							if (target != null) {
 								pers.failedTargets.put(target, nowMs + 60_000L);
 								com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
@@ -281,7 +343,8 @@ public class MovementController {
 								"from_y", String.format("%.1f", pos.y),
 								"to_y", String.format("%.1f", newY),
 								"yaw", String.format("%.1f", newYaw),
-								"deltaY", deltaY);
+								"deltaY", deltaY,
+								"consecutive", pers.sinkGuardConsecutiveCount);
 							stopMovement(p);
 							return true;
 						}
@@ -290,6 +353,14 @@ public class MovementController {
 				// cooldown 内 / 有真人观察者 / deltaY>32 → blacklist target + IDLE 让 reassign 救场。
 				//   每 5s reassign 一次,期间 bot 在 IDLE(guard 不再触发 spam),5s 后新 EXPLORING target
 				//   触发新一轮 guard 检查。多次 blacklist 累积 failedTargets,setExplore 被迫选别处。
+				// P22 修复:走 blacklist 路径时把 heightFloorY 上抬到当前 y - 2。
+				//   背景:Ava2012 case — bot spawn 在 y=67,floorY=57,走到地势偏低区 y=55(合法表面,
+				//     不是 cave)。guard 触发条件 pos.y < floorY=57 满足,但 surfaceY <= bot.y+2(bot
+				//     已经在表面)→ teleport 跳过 → blacklist。但 floorY 不变,下次 reassign 又 trigger,
+				//     bot 9 次 EXPLORING 全部被同一 floor 卡死,0 mined,完全失能。
+				//   修复:blacklist 时上抬 floorY 到 pos.y - 2,等同"承认 bot 当前位置是新合法 floor"。
+				//     teleport 路径不上抬(那条已经 refreshPosition 把 bot 拉回 spawn 附近 surface);
+				//     只 blacklist 路径上抬,因为这条是 surface 检查没过 = bot 已经在 surface 上。
 				if (target != null) {
 					pers.failedTargets.put(target, nowMs + 60_000L);
 					com.maohi.fakeplayer.Personality.recordTaskFailure(pers, target);
@@ -297,9 +368,12 @@ public class MovementController {
 				pers.currentTask = com.maohi.fakeplayer.TaskType.IDLE;
 				pers.taskTarget = null;
 				pers.currentPath.clear();
+				double oldFloor = pers.heightFloorY;
+				pers.heightFloorY = pos.y - 2.0; // 上抬 floor 防同 floor 反复 trigger
 				com.maohi.fakeplayer.TaskLogger.log(p, "sink_guard_blacklist",
 					"y", String.format("%.1f", pos.y),
-					"floorY", String.format("%.1f", pers.heightFloorY),
+					"floorY", String.format("%.1f", oldFloor),
+					"newFloorY", String.format("%.1f", pers.heightFloorY),
 					"cooldownOk", cooldownOk,
 					"noObserver", noObserver);
 				stopMovement(p);
@@ -395,7 +469,19 @@ public class MovementController {
 
 		// V5.43.3 P-3.D: isDangerAhead 已删除"深水=danger"判断(深水靠 wantJump swim-up 兜底,不会淹),
 		//   保留落差/岩浆/火等真 danger。这里直接调用即可,不再需要 isTouchingWater 二次豁免。
-		if (PathfindingNavigation.isDangerAhead(world, nextPos)) {
+		// P25: 把"落差判定"从 isDangerAhead 拆出来走 fall + HP 联合决策:
+		//   - fall ≤ 3 (vanilla 无伤): 永远放行 — 修陡坡卡死(山坡 spawn 走不下来主因)
+		//   - fall = 4 (扣 1 心): bot HP > 2 心(4 HP)时放行,低血量时拒(避免 1 跳致死)
+		//   - fall ≥ 5 (扣 2+ 心): 必拒,等同深悬崖
+		//   岩浆/火/magma 等"非落差类危险"仍然必拒,走 isHazardousBlock。
+		//   A* 邻居展开里也加了 down(3) cost 1.8,A* 能直接算 3 格台阶路径;4 格冒险
+		//   交给本处 HP-guarded 决策,A* 不展开 down(4) 邻居(避免 A* 算出"4 格跳"
+		//   路径让低血量 bot 也走那条)。
+		int fallDepth = PathfindingNavigation.getFallDepth(world, nextPos, 6);
+		boolean tooDeep = fallDepth >= 5;
+		boolean riskyWithLowHp = fallDepth == 4 && p.getHealth() <= 4f;
+		boolean hazardBlock = PathfindingNavigation.isHazardousBlock(world, nextPos);
+		if (tooDeep || riskyWithLowHp || hazardBlock) {
 			stopMovement(p);
 			if (pers != null) pers.currentPath.clear();
 			return true;

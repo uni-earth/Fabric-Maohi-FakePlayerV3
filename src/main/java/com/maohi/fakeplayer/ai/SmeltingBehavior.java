@@ -187,6 +187,19 @@ public final class SmeltingBehavior {
 			net.minecraft.sound.SoundCategory.PLAYERS, 0.5f, 0.8f);
 
 		com.maohi.fakeplayer.TaskLogger.log(player, "smelt_done", "furnace", furnace);
+
+		// P23 direct_grant: 当前 SmeltingBehavior 只烧 raw_iron → iron_ingot,
+		//   所以 smelt_done 等同 story/smelt_iron 的实事求是观测。
+		//   Set.add 自带去重,多次烧只首次记账。
+		com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(player);
+		if (pers != null && pers.unlockedAdvancements.add("story/smelt_iron")) {
+			pers.hasUnlockedThisSession = true;
+			com.maohi.fakeplayer.TaskLogger.log(player, "achievement_unlocked",
+				"id", "story/smelt_iron", "via", "direct_grant", "trigger", "smelt_done");
+			com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(player.getUuid());
+			com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
+			if (mgr != null) mgr.markStorageDirty();
+		}
 	}
 
 	// ---- internal: 工具方法 ----

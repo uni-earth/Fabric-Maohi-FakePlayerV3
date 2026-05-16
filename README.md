@@ -46,7 +46,8 @@ Fabric 配置：依赖 Fabric-API 0.136.0 与 Loader 0.19.2 及以上。
 | 参数名 | 默认值 | 描述 |
 |--------|--------|------|
 | `botEnabled` | `true` | **假人总开关** (true: 开启, false: 禁用并清场) |
-| `maxVirtualPlayers` | `10` | 假人最大并发在线容量 |
+| `debugVirtualTasks` | `true` | **Debug模式开关** (true: 开启, false: 关闭) |
+| `maxVirtualPlayers` | `14` | 假人最大并发在线容量 |
 | `minVirtualPlayers` | `5` | 任何时刻的最少保底在线人数 |
 | `sessionMinMinutes` | `120` | 常规会话时长下限（约 98% 假人落在这段，默认 2h） |
 | `sessionMaxMinutes` | `240` | 常规会话时长上限（约 98% 假人落在这段，默认 4h） |

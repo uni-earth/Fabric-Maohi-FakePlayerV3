@@ -29,6 +29,14 @@ import java.util.concurrent.ThreadLocalRandom;
  *   P5 发现近距敌对实体时,先 equipSwordIfAvailable 切换主手到剑/斧,
  *      再触发攻击 — 解决 bot 手持木镐打 zombie 伤害低的问题。
  *      切换走 PacketHelper.setSelectedSlot 协议包,与真人换手行为一致。
+ *
+ * V5.43 中立生物反击:
+ *   P0 在 hostile 主动开战之前插入"反击"分支,触发信号取
+ *      player.getRecentDamageSource().getAttacker()(vanilla 自动维护,~100 tick 自动清空)。
+ *      解决:狼/末影人/僵尸猪灵/铁傀儡/蜜蜂等中立生物被激怒后回击 bot 时,bot 不还手只挨打。
+ *      策略:谁打我我打谁(优先于"凑近的另一只 hostile"),复用 V5.42 的 equipSword/
+ *      smoothTurn/cooldown/jump-crit 攻击循环。不主动攻击和平状态的中立生物 — 避免
+ *      bot 变成挑衅者。玩家攻击者交给 PvpSparring,这里跳过。
  */
 public class CombatReflex {
 
@@ -74,8 +82,60 @@ public class CombatReflex {
 			}
 		}
 
-		// 4. 优先级2:其他敌对生物 → 反击
+		// 4. 优先级1.5(V5.43): 反击 — 谁最近打了我,我打谁
+		// 触发信号取 player.getRecentDamageSource().getAttacker(),vanilla 自动维护、~100 tick 自动清空。
+		// 覆盖被激怒的狼/末影人/僵尸猪灵/铁傀儡/蜜蜂等中立生物的回击。
+		// 不覆盖玩家(交给 PvpSparring),不覆盖苦力怕(已在上面 flee)。
+		// HostileEntity 也落进这里 — 让"实际打我的"优先于"凑近的另一只 hostile"。
 		Personality pers = Personality.get(player);
+		net.minecraft.entity.damage.DamageSource recentSource = player.getRecentDamageSource();
+		if (recentSource != null) {
+			Entity attacker = recentSource.getAttacker();
+			if (attacker instanceof net.minecraft.entity.LivingEntity le && le.isAlive()
+				&& !(attacker instanceof CreeperEntity)
+				&& !(attacker instanceof ServerPlayerEntity)
+				&& player.squaredDistanceTo(le) < 256.0) {
+
+				if (player.squaredDistanceTo(le) < 16.0) {
+					equipSwordIfAvailable(player);
+				}
+
+				// 与 hostile 分支同款预判 + Fitts 平滑转头
+				double predictX = le.getX() + le.getVelocity().x * 4.0;
+				double predictZ = le.getZ() + le.getVelocity().z * 4.0;
+				double dx = predictX - player.getX();
+				double dz = predictZ - player.getZ();
+				float targetYaw = (float) (Math.toDegrees(Math.atan2(-dx, dz)));
+				smoothTurnYaw(player, targetYaw);
+
+				if (player.squaredDistanceTo(le) < 16.0) {
+					float speedMod = pers != null ? pers.actionMultiplier : 1.0f;
+					float strafeDirection = (player.getId() % 2 == 0) ? 1.0f : -1.0f;
+					if (ThreadLocalRandom.current().nextInt(20) == 0) strafeDirection *= -1;
+					float forwardSpeed = 0.3f * speedMod;
+					float sidewaysSpeed = 0.5f * strafeDirection * speedMod;
+
+					boolean wantJump = false;
+					float cooldown = player.getAttackCooldownProgress(0.5f);
+					if (cooldown >= ATTACK_COOLDOWN_THRESHOLD) {
+						if (player.experienceLevel > 10 && player.isOnGround()
+							&& ThreadLocalRandom.current().nextInt(15) == 0) {
+							wantJump = true;
+						}
+						com.maohi.fakeplayer.network.PacketHelper.attackEntity(player, le);
+						if (pers != null) {
+							pers.lastAttackTick = player.getEntityWorld().getServer().getTicks();
+						}
+					}
+					MovementInputHelper.sendMovement(player, forwardSpeed, sidewaysSpeed,
+						wantJump, player.isSprinting());
+				}
+
+				return false;
+			}
+		}
+
+		// 5. 优先级2:其他敌对生物 → 主动开战
 		for (Entity entity : entities) {
 			if (entity instanceof HostileEntity hostile && hostile.isAlive()
 				&& !(entity instanceof CreeperEntity)) {
