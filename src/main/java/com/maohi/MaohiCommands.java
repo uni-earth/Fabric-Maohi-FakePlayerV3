@@ -359,6 +359,15 @@ public class MaohiCommands {
         ServerPlayerEntity p = manager.getServer().getPlayerManager().getPlayer(uuid);
 
         String task = pers != null && pers.currentTask != null ? pers.currentTask.name() : "?";
+        if (pers != null && pers.currentTask == com.maohi.fakeplayer.TaskType.STRIP_MINE && pers.stripMineState != null) {
+            task = pers.stripMineState.name();
+            if (pers.stripMineState == com.maohi.fakeplayer.ai.phase.PhaseStoneAge.SubPhase.STRIP_MINE_LAYER) {
+                com.maohi.MaohiConfig cfg = com.maohi.MaohiConfig.getInstance();
+                int max = cfg != null ? cfg.stripMineMaxTunnelLen : 64;
+                int y = p != null ? p.getBlockY() : pers.stripMineStartY;
+                task += String.format(" y=%d len=%d/%d", y, pers.stripMineTunnelLen, max);
+            }
+        }
         int ping = manager.getLatency(uuid);
 
         String posPart;

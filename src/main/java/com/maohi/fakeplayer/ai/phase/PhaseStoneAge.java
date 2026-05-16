@@ -70,7 +70,8 @@ public final class PhaseStoneAge implements Phase {
      * public 让 TaskLogger / debug 工具可以查询当前 sub-phase。
      */
     public enum SubPhase {
-        WOOD_START, WOOD_CRAFT, STONE_START, STONE_TOOL, STONE_STABLE
+        WOOD_START, WOOD_CRAFT, STONE_START, STONE_TOOL, STONE_STABLE,
+        STRIP_MINE_DESCEND, STRIP_MINE_LAYER, STRIP_MINE_ASCEND
     }
 
     /** 一次扫包聚合 sub-phase 决策需要的全部计数,避免重复 inv 遍历 */
@@ -116,7 +117,8 @@ public final class PhaseStoneAge implements Phase {
         return d;
     }
 
-    private static SubPhase classify(Digest d) {
+    private static SubPhase classify(Digest d, Personality p) {
+        if (p.stripMineState != null) return p.stripMineState;
         if (d.hasStonePickaxe) return SubPhase.STONE_STABLE;
         if (d.hasAnyPickaxe) {
             return d.cobbleCount < COBBLE_FOR_STONE_PICK ? SubPhase.STONE_START : SubPhase.STONE_TOOL;
@@ -131,7 +133,7 @@ public final class PhaseStoneAge implements Phase {
     @Override
     public void assignTask(ServerPlayerEntity player, Personality personality, PhaseContext ctx) {
         Digest d = scan(player);
-        SubPhase sub = classify(d);
+        SubPhase sub = classify(d, personality);
 
         // V5.30 调试:sub-phase 也带进 assign 日志,定位"卡在哪一格"
         com.maohi.fakeplayer.TaskLogger.log(player, "stone_subphase",
@@ -231,6 +233,27 @@ public final class PhaseStoneAge implements Phase {
             }
 
             case STONE_STABLE -> {
+                com.maohi.MaohiConfig cfg = com.maohi.MaohiConfig.getInstance();
+                if (cfg != null && cfg.enableStripMine) {
+                    long now = System.currentTimeMillis();
+                    boolean cooldownActive = personality.stripMineCooldownUntil > now;
+                    if (!cooldownActive) {
+                        personality.stoneStableCyclesNoIron++;
+                        if (personality.stoneStableCyclesNoIron >= cfg.stripMineTriggerCycles
+                                && player.getHealth() > 14.0f
+                                && d.hasStonePickaxe) {
+                            personality.stripMineState = SubPhase.STRIP_MINE_DESCEND;
+                            personality.stripMineStartPos = player.getBlockPos().toImmutable();
+                            personality.stripMineStartY = player.getBlockY();
+                            personality.stripMineTunnelLen = 0;
+                            personality.currentTask = TaskType.STRIP_MINE;
+                            com.maohi.fakeplayer.TaskLogger.log(player, "stripmine_enter",
+                                "startY", personality.stripMineStartY, "cycles", personality.stoneStableCyclesNoIron);
+                            return;
+                        }
+                    }
+                }
+
                 // 默认 60% 砍 / 40% 挖
                 if (ThreadLocalRandom.current().nextInt(100) < 60) {
                     assignChopTree(player, personality, ctx);
@@ -238,50 +261,38 @@ public final class PhaseStoneAge implements Phase {
                     assignMineStone(player, personality, ctx);
                 }
             }
+
+            case STRIP_MINE_DESCEND, STRIP_MINE_LAYER, STRIP_MINE_ASCEND -> {
+                personality.currentTask = TaskType.STRIP_MINE;
+                personality.taskTarget = player.getBlockPos();  // dummy,实际由 StripMineBehavior 驱动
+                personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_WORK;
+            }
         }
     }
 
     private static void assignChopTree(ServerPlayerEntity player, Personality p, PhaseContext ctx) {
         BlockPos target = ctx.findLog.apply(player.getEntityWorld(), player.getBlockPos());
         if (target != null) {
-            // V5.43.2 P-2.D: BlockScanCache.scanShells 切比雪夫扩散经常先命中树梢 log(y_top)
-            //   而不是树根 log(y_base)。bot 走到树底站平地,到树梢 log 距离 5+ 格,
-            //   vanilla reach 4.5 格够不着,120s WOODCUTTING 站着挖不到 → 4 次 fail。
-            //   修复:命中后向下扫连续 log,锁定最低位(树根),bot 挖地表 log 而非空中。
-            //   日志证据(2026-05-10 log):5 个 bot 全盯 (11, 76~79, -2),Starforged48 距离 9 格,
-            //     4 次 120s WOODCUTTING 全 fail —— 经典"挖不到树顶"指纹。
             target = snapToTreeBase(player.getEntityWorld(), target);
-            // V5.43.4: snapToTreeBase 后 y-diff 仍 > 12 → 山顶树 / 悬空树,bot 在山脚永远走不到。
-            //   日志证据(commit 7648837):DragonGhost (0.5,64,0.5) 反复 EXPLORING target=(13,80,5),
-            //     y 差 16,7 次 task_fail 跨 8 分钟 — doSmartMove 到 xz=0 时算"到达" → stop。
-            //   双重防御(配 MovementController.doSmartMove 的 y-diff 检查):findLog 时直接
-            //     拒绝高 y 候选,加入 failedTargets 60s 黑名单 + markRegionScanEmpty,逼 bot setExplore 离开。
-            // P22 F: 阈值 8 → 12。snapToTreeBase 后山地/丘陵树根 y 可能仍 9~12 格高,原 8 过严
-            //   把大量可达树拒掉 → STONE_AGE 0 进度。12 仍卡死真正不可达的山顶树/树梢(≥13 格)。
-            //   vanilla 跳 1 + 2 格无伤坠 + 短爬坡组合够走 12 格 y-diff。
             if (Math.abs(target.getY() - player.getBlockY()) > 12) {
                 p.failedTargets.put(target, System.currentTimeMillis() + 60_000L);
                 Personality.markRegionScanEmpty(p, player.getBlockPos());
+                // P0: 同步标记新地图 EMPTY
+                int rx = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(player.getBlockX());
+                int rz = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(player.getBlockZ());
+                p.regionMemory.mark(rx, rz, com.maohi.fakeplayer.ai.cognition.RegionScore.EMPTY, false);
                 setExplore(p, player);
                 return;
             }
-            // P25: bot 自身比 target 高 5+ 格时,vanilla 没有"主动跳下树枝/楼层"逻辑,
-            //   doSmartMove 到达检测 |dy|≤3 永远不通过,WOODCUTTING/MINING 反复 task_fail expired。
-            //   日志证据(2026-05-15): SwiftArcher51 远征落 y=72(被树叶/树枝挡),反复挖
-            //     target=(279,65,-627) dy=-7.42 持续 2 分钟 0 移动 → 4 次 fail。
-            //   该情形通常是 sink_guard 远征 / nudge_teleport 后 bot 卡树冠 / 楼层副作用,
-            //   abs(12) 总阈值看不见 bot 高于 target 的反向情形(7 < 12 不拦)。
-            //   修复:bot.y - target.y > 5 时拒 target,blacklist 60s + setExplore 让 bot
-            //     朝水平方向走,通过 vanilla 重力 + setExplore target.y 锚 surface 自然下降。
             if (player.getBlockY() - target.getY() > 5) {
                 p.failedTargets.put(target, System.currentTimeMillis() + 60_000L);
                 setExplore(p, player);
                 return;
             }
-            // V5.43.1 P-2.C: 远距离/高山树先走过去再挖,而不是直接 WOODCUTTING(45/120s 任意 timeout
-            //   都不够"走 12+ 格山坡 + 挖 1 棵树"的复合工作)。距离判断:
-            //     dist² > 144 (12 格外) → set EXPLORING 走过去,下次 reassign(5s 后)在 12 格内自动切 WOODCUTTING
-            //     dist² ≤ 144 → set WOODCUTTING 直接挖
+            // P0: 找到树 → 标记当前 region 为 RICH（LOG 资源丰富）
+            int rx = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(target.getX());
+            int rz = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(target.getZ());
+            p.regionMemory.mark(rx, rz, com.maohi.fakeplayer.ai.cognition.RegionScore.RICH, false);
             double distSq = player.getBlockPos().getSquaredDistance(target);
             if (distSq > 144.0) {
                 setMoveTo(p, player, target);
@@ -289,9 +300,11 @@ public final class PhaseStoneAge implements Phase {
                 set(p, player, TaskType.WOODCUTTING, target);
             }
         } else {
-            // V5.28.6 P2-Scan: 近 32 格没树 → EXPLORING ±40 走出去再扫
-            // V5.42: 把当前 region 标 empty,setExplore 下次别再选回这里
+            // V5.42 + P0: 近 32 格没树 → 两套地图都标 EMPTY
             Personality.markRegionScanEmpty(p, player.getBlockPos());
+            int rx = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(player.getBlockX());
+            int rz = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(player.getBlockZ());
+            p.regionMemory.mark(rx, rz, com.maohi.fakeplayer.ai.cognition.RegionScore.EMPTY, false);
             setExplore(p, player);
         }
     }
@@ -302,30 +315,24 @@ public final class PhaseStoneAge implements Phase {
             : null;
         if (target == null) target = scanDownForStone(player);
         if (target != null) {
-            // V5.43.4: 同 assignChopTree —— ctx.findStone(BlockScanCache 32 格 + ±2 Y 扫)
-            //   理论上不会命中远高目标,但裸石/裂石/深板岩在山体侧面/悬崖时仍可能给出 y-diff > 12。
-            //   scanDownForStone 自身锁定 -1~-8 dy,永远通过这层过滤。
-            // P22 F: 阈值 8 → 12,与 assignChopTree 同步放宽。
             if (Math.abs(target.getY() - player.getBlockY()) > 12) {
                 p.failedTargets.put(target, System.currentTimeMillis() + 60_000L);
                 Personality.markRegionScanEmpty(p, player.getBlockPos());
+                int rx = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(player.getBlockX());
+                int rz = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(player.getBlockZ());
+                p.regionMemory.mark(rx, rz, com.maohi.fakeplayer.ai.cognition.RegionScore.EMPTY, false);
                 setExplore(p, player);
                 return;
             }
-            // P25: bot 自身比 target 高 5+ 格时,vanilla 没有"主动跳下树枝/楼层"逻辑,
-            //   doSmartMove 到达检测 |dy|≤3 永远不通过,WOODCUTTING/MINING 反复 task_fail expired。
-            //   日志证据(2026-05-15): SwiftArcher51 远征落 y=72(被树叶/树枝挡),反复挖
-            //     target=(279,65,-627) dy=-7.42 持续 2 分钟 0 移动 → 4 次 fail。
-            //   该情形通常是 sink_guard 远征 / nudge_teleport 后 bot 卡树冠 / 楼层副作用,
-            //   abs(12) 总阈值看不见 bot 高于 target 的反向情形(7 < 12 不拦)。
-            //   修复:bot.y - target.y > 5 时拒 target,blacklist 60s + setExplore 让 bot
-            //     朝水平方向走,通过 vanilla 重力 + setExplore target.y 锚 surface 自然下降。
             if (player.getBlockY() - target.getY() > 5) {
                 p.failedTargets.put(target, System.currentTimeMillis() + 60_000L);
                 setExplore(p, player);
                 return;
             }
-            // V5.43.1 P-2.C: 同 assignChopTree 的距离判断
+            // P0: 找到石头 → 标记当前 region 为 MEDIUM（石头到处都有，不算 RICH）
+            int rx = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(target.getX());
+            int rz = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(target.getZ());
+            p.regionMemory.mark(rx, rz, com.maohi.fakeplayer.ai.cognition.RegionScore.MEDIUM, false);
             double distSq = player.getBlockPos().getSquaredDistance(target);
             if (distSq > 144.0) {
                 setMoveTo(p, player, target);
@@ -333,8 +340,11 @@ public final class PhaseStoneAge implements Phase {
                 set(p, player, TaskType.MINING, target);
             }
         } else {
-            // V5.42: 同 assignChopTree —— 近 32 格 + 脚下 8 格都没石头 = 这片 region 确实空
+            // P0: 近 32 格 + 脚下 8 格都没石头 → 两套地图都标 EMPTY
             Personality.markRegionScanEmpty(p, player.getBlockPos());
+            int rx = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(player.getBlockX());
+            int rz = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(player.getBlockZ());
+            p.regionMemory.mark(rx, rz, com.maohi.fakeplayer.ai.cognition.RegionScore.EMPTY, false);
             setExplore(p, player);
         }
     }
@@ -407,104 +417,121 @@ public final class PhaseStoneAge implements Phase {
     }
 
     /**
-     * V5.28.6 P2-Scan: scan 失败的兜底——派一个 EXPLORING 目标。
-     * V5.29 G.3:在面朝方向 ±60° 扇形里采样 EXPLORE_RADIUS 格外的点(0.85~1.0 EXPLORE_RADIUS 距离),
-     *   营造"定向跋涉"观感。原全随机 ±EXPLORE_RADIUS 立方体采样容易落在背后,
-     *   假人会转身倒退 → 折返跑指纹明显。±60° 扇形 ≈ 真人野外探索不会回头的视野。
-     * V5.30+ Y-snap:目标 Y 锁到 MOTION_BLOCKING 表面,而不是和 player.getBlockY() 同高。
-     *   旧实现 add(dx, 0, dz) 在世界 spawn 落在 (0,0,0) 的 dev/test 路径下会让 bot 永远在
-     *   y=0 平面横向打转 — 表面树永远扫不到(BlockScanCache 半径仅 ±2 Y)→ logs=0 死循环。
-     *   chunk 未加载时回退 player.getBlockY(),不影响正常路径上的 bot。
-     * V5.42 重试循环:scannedEmptyRegions 里有过期未到的 region 就重选目标。
-     *   前 3 次仍走 ±60° 扇形(优先维持"定向跋涉"观感);若仍命中空 region,
-     *   后 2 次扩到全圆 360°(假人转身回头比"重复在同一片空地打转"穿帮风险低)。
-     *   5 次仍命中(理论上罕见,周围全标空才会发生)→ 接受最后一次结果,等 region TTL 过期。
+     * P0+P1 升级版 setExplore。
+     *
+     * 旧逻辑: 随机扇形采样 → 遇到 scannedEmptyRegions 跳过 → 末尾兜底
+     * 新逻辑: 生成多个候选 → RegionMemoryMap 加权抽签（P0）→ 叠加 BiomePrior 亲和度偏向（P1）→ 择优
+     *
+     * P0 改进: RICH region 权重5 / 未知3 / MEDIUM2 / EMPTY被跳过
+     * P1 改进: 同一批候选中，biome 亲和度高的额外+1权重（不会超过RICH，只是平局打破者）
      */
     private static void setExplore(Personality p, ServerPlayerEntity player) {
-        // P23-D: 丛林叶子包围预检
+        // P23-D: 丛林叶子包围预检（沿用原有逻辑）
         if (isTrappedByLeaves(player)) {
             BlockPos leafTarget = findAdjacentLeaf(player);
             if (leafTarget != null) {
                 p.currentTask = TaskType.WOODCUTTING;
                 p.taskTarget = leafTarget;
-                p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 60; // 3s 短任务
+                p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 60;
                 com.maohi.fakeplayer.TaskLogger.log(player, "explore_leaf_break", "target", leafTarget);
                 return;
             }
         }
 
+        // P0: 清理 RegionMemoryMap 过期 entry（顺手，低开销）
+        p.regionMemory.prune();
+        // 兼容保留：旧的 scannedEmptyRegions 也同步清理
         Personality.pruneScannedEmptyRegions(p);
+
         ThreadLocalRandom rng = ThreadLocalRandom.current();
-        int bestTx = player.getBlockX();
-        int bestTz = player.getBlockZ();
-        boolean found = false;
-        final int MAX_ATTEMPTS = 10; // 增加尝试次数
-        
-        for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-            float angleSpan = (attempt < 3) ? 120f : 360f;
+        final int NUM_CANDIDATES = 12; // 生成候选数（比旧的 10 次更多，给加权抽签更多选项）
+        int[][] candidates = new int[NUM_CANDIDATES][2]; // [tx, tz]
+        int validCount = 0;
+
+        // P1: 根据当前 biome 判断 bot 最需要什么资源
+        // STONE_STABLE 假人最紧缺的通常是树（用于合成）或石头（用于工具）
+        com.maohi.fakeplayer.ai.cognition.BiomePrior.ResourceType neededResource;
+        if (p.growthPhase == com.maohi.fakeplayer.GrowthPhase.STONE_AGE) {
+            // 石器时代：判断缺什么。有镐但没 log → 需要木头；没镐 → 需要石头
+            boolean wantsLog = (p.currentTask == TaskType.WOODCUTTING
+                || p.stoneStableCyclesNoIron > 0); // 进入 strip-mine 循环说明铁是瓶颈
+            neededResource = wantsLog
+                ? com.maohi.fakeplayer.ai.cognition.BiomePrior.ResourceType.LOG
+                : com.maohi.fakeplayer.ai.cognition.BiomePrior.ResourceType.STONE;
+        } else {
+            neededResource = com.maohi.fakeplayer.ai.cognition.BiomePrior.ResourceType.LOG; // 默认
+        }
+
+        // P1: 检查当前 biome 是否对目标资源极端不利
+        boolean currentBiomeIsHostile = com.maohi.fakeplayer.ai.cognition.BiomePrior.isHostile(player, neededResource);
+
+        // 生成候选方向
+        for (int attempt = 0; attempt < NUM_CANDIDATES * 2 && validCount < NUM_CANDIDATES; attempt++) {
+            // P1: 如果当前 biome 极度不友好（如沙漠里找树），扩大扇形范围（转向更大）
+            float angleSpan = currentBiomeIsHostile
+                ? (attempt < 4 ? 180f : 360f) // 不友好 biome：更积极地转向
+                : (attempt < 3 ? 120f : 360f); // 正常情况：前几次保持方向感
+
             float offsetDeg = rng.nextFloat() * angleSpan - angleSpan / 2f;
             double rad = Math.toRadians(player.getYaw() + offsetDeg);
-            
-            // 后续尝试扩大搜索半径，强迫走出空旷地带
-            // P22 I: 倍率 0.5 → 0.2(最大 1.2×),整体最远 30 × 1.2 × 1.0 = 36 格,
-            //   保持在 A* 2048 节点覆盖范围内,避免 setExplore 选不可达 target → 死循环。
-            double multiplier = 1.0 + (attempt / 3) * 0.2;
-            // V5.43.5 P-3.I micro_explore: fails 2-3 时缩小半径到 ~12 格让 bot 先小步挪出 blocked 局部。
-            //   背景:本次 P22 log IronSky 在 jungle 反复 blocked_no_path (fails=1,2,3) 然后 force_explore
-            //     (fails=4+)。但 force_explore 半径 60+ 格在 jungle 同样 A* 找不到路 → 死循环。
-            //   micro_explore 在 fails=2,3 时把 EXPLORE_RADIUS 从 30 缩到 ~12 格,bot 先朝近处走一步,
-            //     哪怕只挪 12 格也可能挤过当前叶子片 → 下次 setExplore 用 bot 新 yaw + 新位置重新展开。
-            //   fails<2 走正常 30 格半径(jungle 外 biome 不需缩);fails>=4 走 force_explore(由
-            //     forceExploreAfterFailures 阶梯接管,半径 60-80)。
-            if (p.taskFailCount >= 2) {
-                multiplier *= 0.4; // 30 × 0.4 = 12 格
-            }
-            double dist = EXPLORE_RADIUS * multiplier * (0.85 + rng.nextDouble() * 0.15); // 0.85~1.0 半径,贴外圈
-            
+
+            double multiplier = 1.0 + (attempt / 4) * 0.2;
+            if (p.taskFailCount >= 2) multiplier *= 0.4;
+
+            double dist = EXPLORE_RADIUS * multiplier * (0.85 + rng.nextDouble() * 0.15);
             int dx = (int) Math.round(-Math.sin(rad) * dist);
             int dz = (int) Math.round(Math.cos(rad) * dist);
             int tx = player.getBlockX() + dx;
             int tz = player.getBlockZ() + dz;
-            int rx = Personality.blockToRegion(tx);
-            int rz = Personality.blockToRegion(tz);
-            
-            if (Personality.isRegionScanEmpty(p, rx, rz)) continue;
-            
-            // V5.43.3 P-3.E: 朝 target 第一格如果是真 danger (落差/岩浆/火),换方向。
+
+            // 危险方向跳过（沿用原有逻辑）
             int sdx = Integer.signum(dx);
             int sdz = Integer.signum(dz);
             BlockPos firstStep = player.getBlockPos().add(sdx, 0, sdz);
             if (com.maohi.fakeplayer.ai.PathfindingNavigation.isDangerAhead(
                     player.getEntityWorld(), firstStep)) continue;
-                    
-            bestTx = tx;
-            bestTz = tz;
-            found = true;
-            break;
+
+            candidates[validCount][0] = tx;
+            candidates[validCount][1] = tz;
+            validCount++;
         }
-        
-        if (!found) {
-            // 兜底：如果所有方向都是 empty region 或 danger，强制往一个大半径随机方向走，打破死循环
+
+        int tx, tz;
+
+        if (validCount == 0) {
+            // 极端兜底：全部方向都是危险，强制往大半径随机走
             double rad = rng.nextDouble() * Math.PI * 2;
             double dist = EXPLORE_RADIUS * 2.0;
-            bestTx = player.getBlockX() + (int) Math.round(-Math.sin(rad) * dist);
-            bestTz = player.getBlockZ() + (int) Math.round(Math.cos(rad) * dist);
+            tx = player.getBlockX() + (int) Math.round(-Math.sin(rad) * dist);
+            tz = player.getBlockZ() + (int) Math.round(Math.cos(rad) * dist);
+            com.maohi.fakeplayer.TaskLogger.log(player, "explore_fallback", "reason", "no_valid_candidates");
+        } else {
+            // P0+P1: 加权抽签选出最优候选
+            // 先用 RegionMemoryMap 加权（RICH/MEDIUM/EMPTY/未知）
+            int[][] validCandidates = java.util.Arrays.copyOf(candidates, validCount);
+            int picked = p.regionMemory.weightedPick(validCandidates);
+
+            if (picked == -1) {
+                // 所有候选都是 EMPTY → 沿用旧兜底：打破死循环，随机大半径
+                double rad = rng.nextDouble() * Math.PI * 2;
+                double dist = EXPLORE_RADIUS * 2.0;
+                tx = player.getBlockX() + (int) Math.round(-Math.sin(rad) * dist);
+                tz = player.getBlockZ() + (int) Math.round(Math.cos(rad) * dist);
+                com.maohi.fakeplayer.TaskLogger.log(player, "explore_all_empty", "candidates", validCount);
+            } else {
+                tx = validCandidates[picked][0];
+                tz = validCandidates[picked][1];
+                // P0 日志：记录选中 region 的评分，便于观察加权效果
+                int rx = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(tx);
+                int rz = com.maohi.fakeplayer.ai.cognition.RegionMemoryMap.blockToRegion(tz);
+                com.maohi.fakeplayer.ai.cognition.RegionScore pickedScore = p.regionMemory.query(rx, rz);
+                com.maohi.fakeplayer.TaskLogger.log(player, "explore_weighted_pick",
+                    "score", pickedScore == null ? "UNKNOWN" : pickedScore.name(),
+                    "candidates", validCount, "biomeHostile", currentBiomeIsHostile,
+                    "resource", neededResource.name());
+            }
         }
-        
-        int tx = bestTx;
-        int tz = bestTz;
-        // V5.43.5 P-3.F: target.y 恢复为 (tx,tz) 上的 surface heightmap,不再用 bot.y。
-        //   背景:V5.43.3 P-3.I 把 ty 改成 bot.y 是为修"山顶 bot 朝 y=63 走 xz 到达 stopMovement
-        //     永远不下山"的 bug,但那个 bug 已经被 V5.43.4 在 doSmartMove:196 加的
-        //     `Math.abs(dy) <= 3.0` 到达检查解决了 — 山顶 bot 走到 target.xz 时 |dy|>3 不算到达,
-        //     vanilla 重力会让 bot 沿斜坡自然下来到地表 y。P-3.I 现在是过时的补丁。
-        //   P-3.I 副作用 = 本次 log 根因:bot 走中途掉进 cave (y=46),vanilla setExplore reassign
-        //     用 bot 当前 y → target.y=46,新 target 也在 cave 高度 → bot 在 cave 反复 stuck_blacklist
-        //     → 1200 ticks stuck_kick。7 bot 平均 2 分钟 spawn→kick。
-        //   修复:target.y 用 (tx,tz) 的 MOTION_BLOCKING surface y。bot 哪怕掉进 cave,target.y 永远
-        //     锚在地表,bot 朝 surface 走;A* 找不到向上路径时由 stuck stage 2 teleport 兜底救回。
-        //   getSafeTopY 在 chunk 未加载时 fallback player.getBlockY(),等价 P-3.I 旧行为,不破除原
-        //     "(0,0,0) 异常 spawn 在 y=0 平面打转" 兜底语义。
+
         int ty = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
             player.getEntityWorld(), tx, tz, player.getBlockY());
         p.currentTask = TaskType.EXPLORING;

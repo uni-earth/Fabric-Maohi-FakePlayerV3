@@ -56,9 +56,10 @@ public class BlockPlacer {
 			return;
 		}
 
-		// 1. 只有挖矿或探索状态才会插火把
+		// 1. 只有挖矿、探索或剥削挖矿状态才会插火把
 		if (personality.currentTask != TaskType.MINING &&
-			personality.currentTask != TaskType.EXPLORING) {
+			personality.currentTask != TaskType.EXPLORING &&
+			personality.currentTask != TaskType.STRIP_MINE) {
 			return;
 		}
 

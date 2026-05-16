@@ -1815,6 +1815,11 @@ prepareAndSpawnVirtualPlayer();
             }
         }
 
+        if (!isFleeing && com.maohi.fakeplayer.ai.StripMineBehavior.isActive(personality)) {
+            com.maohi.fakeplayer.ai.StripMineBehavior.tick(p, personality);
+            return;
+        }
+
         // 5. 核心移动逻辑：执行寻路、避障与到达检测
         // V5.42 修复多动症:CRAFTING 状态下不再寻路。原行为是 bot 进入 CRAFTING 后 craftingTicks
         //   倒计时仍然跑,但 doSmartMove 朝 taskTarget(远处的树/矿石)继续走 → 走出工作台 6 格范围
@@ -1823,6 +1828,7 @@ prepareAndSpawnVirtualPlayer();
         //   所以这里短路是最干净的 fix。tickCrafting 内部会处理挥手动画,不需要这里调度。
         if (!isFleeing && personality.taskTarget != null
             && personality.currentTask != TaskType.IDLE
+            && personality.currentTask != TaskType.STRIP_MINE
             && personality.currentTask != TaskType.CRAFTING) {
             // V5.5 角色弧线与节律对移动步长的影响
             int localHr = (int) (((System.currentTimeMillis() / 3600000) + personality.timezoneOffset) % 24);

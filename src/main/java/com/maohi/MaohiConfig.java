@@ -47,6 +47,14 @@ public class MaohiConfig {
      */
     public boolean debugVirtualTasks = true;
 
+    // ===== Strip Mine 配置 (Plan C) =====
+    public boolean enableStripMine = true;          // V5.43 默认开启 — 老 bot 卡 STONE_AGE 14h+,直接上
+    public int stripMineTriggerCycles = 5;           // 触发的 STONE_STABLE cycle 数
+    public int stripMineTargetY = 15;                // strip 层 Y
+    public int stripMineMaxTunnelLen = 64;           // 单次 LAYER 最大长度
+    public int stripMineCooldownMinutes = 30;        // 退出后冷却
+    public boolean stripMineRequireTorches = false;  // 是否需要火把才下去(Peaceful 关掉)
+
     /** 假人总容量 */
     public int maxVirtualPlayers = 15;
 

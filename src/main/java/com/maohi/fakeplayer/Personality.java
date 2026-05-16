@@ -27,6 +27,15 @@ public class Personality {
 	public final java.util.concurrent.atomic.AtomicInteger sequenceCounter = new java.util.concurrent.atomic.AtomicInteger(1);
 
 	// V5.5 拟真加固：成长阶段追踪
+	public transient com.maohi.fakeplayer.ai.phase.PhaseStoneAge.SubPhase stripMineState = null;
+	public transient BlockPos stripMineStartPos = null;
+	public transient int stripMineStartY = 64;
+	public int stoneStableCyclesNoIron = 0;
+	public long stripMineCooldownUntil = 0L;
+	public transient int stripMineTunnelLen = 0;
+	public transient Direction stripMineFacing = Direction.NORTH;
+	public transient int stripMineConsecutiveFails = 0;
+	
 	public GrowthPhase growthPhase = GrowthPhase.STONE_AGE;
 	public long phaseEnteredAt = 0L;
 	public long firstJoinAt = 0L;
@@ -98,6 +107,11 @@ public class Personality {
 	//   避免 vanilla 树重生 / 真人放新方块后 bot 仍然不去看。
 	//   仅本地内存,不持久化(下线即清);Gson 序列化忽略此字段(transient)。
 	public transient java.util.Map<Long, Long> scannedEmptyRegions = new java.util.HashMap<>();
+
+	// P0: RegionMemoryMap — 三档评分，替代上面的单向黑名单。双轨并行一个版本后删旧字段。
+	// transient：仅本会话，不持久化（bot 下线重上线时世界可能已变）。
+	public transient com.maohi.fakeplayer.ai.cognition.RegionMemoryMap regionMemory
+		= new com.maohi.fakeplayer.ai.cognition.RegionMemoryMap();
 
 	// V5.43 reassign 节流时间戳(P-1.A 紧急修):
 	//   原节流条件 totalTicks % 100 == 0 在 MSPT 熔断时(>80ms)失效——totalTicks 停止递增,

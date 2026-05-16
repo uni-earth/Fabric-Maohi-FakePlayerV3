@@ -17,5 +17,6 @@ public enum TaskType {
 	AFK,
 	RECONNECTING,
 	HUNTING,
-	CRAFTING
+	CRAFTING,
+	STRIP_MINE
 }
