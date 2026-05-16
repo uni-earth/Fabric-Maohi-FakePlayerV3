@@ -501,9 +501,8 @@ public final class PhaseStoneAge implements Phase {
             // 检查背包里是否有足够木头（>=4 原木 ≈ 够做工具）
             net.minecraft.item.ItemStack mainHand = player.getMainHandStack();
             boolean hasPickaxe = !mainHand.isEmpty()
-                && mainHand.getItem() instanceof net.minecraft.item.PickaxeItem;
+                && mainHand.isIn(net.minecraft.registry.tag.ItemTags.PICKAXES);
             // 有镐子说明已有石头阶段，当前更需要树（维持工具链）
-            // 没镐子说明需要石头
             neededResource = hasPickaxe
                 ? com.maohi.fakeplayer.ai.cognition.BiomePrior.ResourceType.LOG
                 : com.maohi.fakeplayer.ai.cognition.BiomePrior.ResourceType.STONE;

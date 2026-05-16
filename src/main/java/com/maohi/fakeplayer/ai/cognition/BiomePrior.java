@@ -89,11 +89,12 @@ public final class BiomePrior {
         if (b.isIn(BiomeTags.IS_SAVANNA)) return 1;   // 热带草原：有金合欢树
         if (b.isIn(BiomeTags.IS_TAIGA))   return 2;   // 针叶林：松树/云杉
         if (b.isIn(BiomeTags.IS_BADLANDS)) return -1; // 恶地：几乎没树
-        if (b.isIn(BiomeTags.IS_DESERT))  return -2;  // 沙漠：基本没树
+        // NOTE: IS_DESERT 在 1.21.x Fabric Yarn 中不存在，沙漠 biome 以下标签均不匹配
+        //   → fallthrough 到 return 0（中立）实际上偏保守，但不会编译错误
         if (b.isIn(BiomeTags.IS_OCEAN))   return -2;  // 海洋：没树
         if (b.isIn(BiomeTags.IS_NETHER))  return -2;  // 下界：没树
         if (b.isIn(BiomeTags.IS_MOUNTAIN)) return 0;  // 山地：少量树
-        return 0; // 草原/其他：中立
+        return 0; // 草原/沙漠/其他：中立
     }
 
     /**
@@ -139,7 +140,7 @@ public final class BiomePrior {
         if (b.isIn(BiomeTags.IS_SAVANNA))  return 2;  // 牛羊大量
         if (b.isIn(BiomeTags.IS_FOREST))   return 1;  // 猪/鸡/浆果
         if (b.isIn(BiomeTags.IS_TAIGA))    return 1;  // 甜浆果/狐狸
-        if (b.isIn(BiomeTags.IS_DESERT))   return -2; // 沙漠：兔子是唯一来源
+        // NOTE: IS_DESERT 在 1.21.x Fabric Yarn 中不存在，沙漠 fallthrough → return 0
         if (b.isIn(BiomeTags.IS_NETHER))   return -1; // 下界：猪灵/疣猪兽
         if (b.isIn(BiomeTags.IS_OCEAN))    return -1; // 海：只有鱼
         if (b.isIn(BiomeTags.IS_END))      return -2; // 末地：没食物

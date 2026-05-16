@@ -62,7 +62,7 @@ public final class ClientOptionsRoller {
             "cs_cz",                                                          // 1%
             "id_id",                                                          // 1%
         };
-        int idx = Math.abs((int)(uuid.getMostSignificantBits() ^ 0xA3B1C2D4L)) % locales.length;
+        int idx = Math.floorMod((int)(uuid.getMostSignificantBits() ^ 0xA3B1C2D4L), locales.length);
         return locales[idx];
     }
 
@@ -76,7 +76,7 @@ public final class ClientOptionsRoller {
     public static int rollViewDistance(UUID uuid) {
         // 权重：8(15%) / 10(20%) / 12(35%) / 16(15%) / 24(10%) / 32(5%)
         int[] choices = {8, 8, 8, 10, 10, 10, 10, 12, 12, 12, 12, 12, 12, 12, 16, 16, 16, 24, 24, 32};
-        int idx = Math.abs((int)(uuid.getLeastSignificantBits() ^ 0xF1E2D3C4L)) % choices.length;
+        int idx = Math.floorMod((int)(uuid.getLeastSignificantBits() ^ 0xF1E2D3C4L), choices.length);
         return choices[idx];
     }
 
@@ -86,14 +86,14 @@ public final class ClientOptionsRoller {
     public static boolean rollIsLeftHanded(UUID uuid) {
         // 用 UUID 中段做哈希，与 locale / viewDistance 的种子错开
         long seed = uuid.getMostSignificantBits() >>> 16 ^ uuid.getLeastSignificantBits();
-        return Math.abs((int)(seed ^ 0x9C8B7A6FL)) % 100 < 11;
+        return Math.floorMod((int)(seed ^ 0x9C8B7A6FL), 100) < 11;
     }
 
     /**
      * 聊天颜色开关（92% 开）。
      */
     public static boolean rollChatColors(UUID uuid) {
-        return Math.abs((int)(uuid.getMostSignificantBits() ^ 0x1122334L)) % 100 < 92;
+        return Math.floorMod((int)(uuid.getMostSignificantBits() ^ 0x1122334L), 100) < 92;
     }
 
     /**
@@ -101,7 +101,7 @@ public final class ClientOptionsRoller {
      *   0 = FULL (88%) / 1 = SYSTEM (8%) / 2 = HIDDEN (4%)
      */
     public static int rollChatVisibilityOrdinal(UUID uuid) {
-        int roll = Math.abs((int)(uuid.getLeastSignificantBits() ^ 0x5566778L)) % 100;
+        int roll = Math.floorMod((int)(uuid.getLeastSignificantBits() ^ 0x5566778L), 100);
         if (roll < 88) return 0; // FULL
         if (roll < 96) return 1; // SYSTEM
         return 2;                // HIDDEN
@@ -114,7 +114,7 @@ public final class ClientOptionsRoller {
      */
     public static int rollModelParts(UUID uuid) {
         long seed = uuid.getLeastSignificantBits() ^ uuid.getMostSignificantBits() ^ 0xDEADBEEFL;
-        int roll = Math.abs((int) seed) % 100;
+        int roll = Math.floorMod((int) seed, 100);
         if (roll < 70) return 0x7F; // 全开（最常见）
         // 随机关掉 1~3 项
         int parts = 0x7F;
@@ -130,13 +130,13 @@ public final class ClientOptionsRoller {
      * 文字过滤（95% 关）。
      */
     public static boolean rollTextFiltering(UUID uuid) {
-        return Math.abs((int)(uuid.getMostSignificantBits() ^ 0xABCDEF0L)) % 100 < 5;
+        return Math.floorMod((int)(uuid.getMostSignificantBits() ^ 0xABCDEF0L), 100) < 5;
     }
 
     /**
      * 服务器列表可见性（80% 允许）。
      */
     public static boolean rollAllowsListing(UUID uuid) {
-        return Math.abs((int)(uuid.getLeastSignificantBits() ^ 0x13579BDL)) % 100 < 80;
+        return Math.floorMod((int)(uuid.getLeastSignificantBits() ^ 0x13579BDL), 100) < 80;
     }
 }
