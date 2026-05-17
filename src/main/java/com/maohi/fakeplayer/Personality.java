@@ -86,7 +86,11 @@ public class Personality {
 	}
 
 	public float actionMultiplier = com.maohi.fakeplayer.ai.BehavioralDistributionValidator.getAlignedActionMultiplier();
-	public TaskType currentTask = TaskType.IDLE; public BlockPos taskTarget = null; public long taskExpireTime = 0;
+	public TaskType currentTask = TaskType.IDLE; public BlockPos taskTarget = null;
+	// V5.45 FIX: taskExpireTime 引用绝对 server tick,服务器重启后 tick 归零,
+	//   旧持久化值(如 120000)导致 serverTicks > taskExpireTime 永远 false → reassignDue 永不触发。
+	//   transient:每次登录重置为 0,serverTicks(哪怕只有几百)立刻 > 0 → 正常派新任务。
+	public transient long taskExpireTime = 0;
 	// V5.40 修复:寻路被阻挡时 A* 算出来的下一步路径点。原代码把这个塞回 taskTarget,
 	// 导致 handleMiningTask 用 path step(脚下 air 方块)当挖矿目标 → target_is_air 死循环。
 	// 新行为:doSmartMove 优先朝 pathWaypoint 走;到达后清空,后续 tick 自动回到朝 taskTarget 走。
@@ -155,11 +159,15 @@ public class Personality {
 	public GrowthPhase lastLoggedPhase = null;
 	public boolean isEating = false; public int eatingTicks = 0;
 	// V3.3 全链路真实：挖掘状态机（多 tick 持续挖掘）
-	public boolean isMining = false;          // 是否正在挖掘
-	public BlockPos miningPos = null;          // 当前挖掘的方块坐标
-	public int miningTotalTicks = 0;           // 挖掘总时长（按方块硬度+工具效率计算）
-	public int miningElapsedTicks = 0;         // 已挖了多少 tick
-	public net.minecraft.util.math.Direction miningDirection = net.minecraft.util.math.Direction.NORTH; // 挖掘面朝方向
+	// V5.45 FIX: 以下五个字段全部改为 transient。
+	//   根因:isMining=true 被 Gson 写盘,bot 重连后带幽灵状态 → handleStuckDetection 里的豁免分支
+	//   每 tick 强制 stuckTicks=0 → 卡死检测完全失效,stuck_blacklist / teleport / kick 三级全哑火。
+	//   transient 让这些字段每次会话从默认值(false / null / 0 / NORTH)起步,保证物理状态干净。
+	public transient boolean isMining = false;          // 是否正在挖掘
+	public transient BlockPos miningPos = null;          // 当前挖掘的方块坐标
+	public transient int miningTotalTicks = 0;           // 挖掘总时长（按方块硬度+工具效率计算）
+	public transient int miningElapsedTicks = 0;         // 已挖了多少 tick
+	public transient net.minecraft.util.math.Direction miningDirection = net.minecraft.util.math.Direction.NORTH; // 挖掘面朝方向
 	// V3.3 全链路真实：使用物品状态
 	public boolean isDrinkingPotion = false;   // 是否正在喝药水
 	public long lastCommandTime = 0;
