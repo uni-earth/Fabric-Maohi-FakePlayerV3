@@ -56,9 +56,10 @@ public class BlockPlacer {
 			return;
 		}
 
-		// 1. 只有挖矿或探索状态才会插火把
+		// 1. 只有挖矿、探索或剥削挖矿状态才会插火把
 		if (personality.currentTask != TaskType.MINING &&
-			personality.currentTask != TaskType.EXPLORING) {
+			personality.currentTask != TaskType.EXPLORING &&
+			personality.currentTask != TaskType.STRIP_MINE) {
 			return;
 		}
 
@@ -465,13 +466,21 @@ public class BlockPlacer {
 	}
 
 	/**
-	 * planA P-1 诊断:tryPlaceCraftingTable 卡点节流日志(每 30s/600 tick 一条同原因)。
-	 * 关注:bot 已合出 crafting_table item 后却 5+ 分钟不放下,wooden_pickaxe 永远造不出 →
-	 * STONE_AGE 永卡。日志能直接看出卡在哪个 gate。
+	 * planA P-1 诊断:tryPlaceCraftingTable 卡点节流日志。
+	 * - no_inv_table: 木器时代早期常态(背包无工作台),仅 5min(6000 tick)打一条,降低日志噪音。
+	 * - 其他 reason(task_state / gui_blocked 等):保留 30s(600 tick)节流,保留诊断价值。
+	 * V5.45 OPT: 区分节流策略后,6 bot × 30s 频率日志减少约 90%。
 	 */
 	private static void logTablePlaceDiag(ServerPlayerEntity player, Personality personality, long now, String reason) {
-		if (now - personality.lastTablePlaceDiagAt < 600L) return;
-		personality.lastTablePlaceDiagAt = now;
+		if ("no_inv_table".equals(reason)) {
+			// no_inv_table 是木器时代常态,5min 静默一次够了
+			if (now - personality.lastTableNoInvDiagAt < 6000L) return;
+			personality.lastTableNoInvDiagAt = now;
+		} else {
+			// 其他 reason 有诊断价值,30s 节流
+			if (now - personality.lastTablePlaceDiagAt < 600L) return;
+			personality.lastTablePlaceDiagAt = now;
+		}
 		com.maohi.fakeplayer.TaskLogger.log(player, "table_place_skip",
 			"reason", reason, "stage", personality.tablePlaceStage,
 			"pos", player.getBlockPos());

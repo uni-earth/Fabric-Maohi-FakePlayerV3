@@ -14,6 +14,7 @@ import java.util.concurrent.ThreadLocalRandom;
  * ┌──────────────────────────────────────────────────────────────────┐
  * │ 阶段 × Trigger 映射表                                              │
  * │                                                                    │
+ * │ WOOD_AGE    │ PlantSeed, SleepInBed, KillMob   (与 STONE_AGE 同桶) │
  * │ STONE_AGE   │ PlantSeed, SleepInBed, KillMob                       │
  * │ IRON_AGE    │ PlantSeed, SleepInBed, KillMob,                      │
  * │             │ HotStuff, BreedAnimals, AdventuringTime              │
@@ -30,7 +31,7 @@ import java.util.concurrent.ThreadLocalRandom;
  *   4. 结果:8 个假人同一秒上线,FormObsidian 不会都挤在第 60 秒 roll——会散在 60~240 秒内
  *
  * 阶段分桶好处:
- *   - STONE_AGE 假人不会浪费 tick 去检查"扔末影之眼",早期 phase 性能更好
+ *   - WOOD_AGE/STONE_AGE 假人不会浪费 tick 去检查"扔末影之眼",早期 phase 性能更好
  *   - 后期假人不会反复 roll 已解锁的基础成就(Trigger.shouldRun 里也有 alreadyUnlocked 双保险)
  *
  * 扩展方式:
@@ -43,12 +44,16 @@ public final class TriggerRegistry {
 	private TriggerRegistry() {} // 工具类
 
 	// ===== 阶段分桶:每个 GrowthPhase 只 tick 自己桶里的 trigger =====
+	// V5.44: WOOD_AGE 与 STONE_AGE 共享同一份早期 trigger 列表(指向同一 List 实例,无额外内存)
+	private static final List<AchievementTrigger> EARLY_GAME_TRIGGERS = List.of(
+		PlantSeedTrigger.INSTANCE,
+		SleepInBedTrigger.INSTANCE,
+		KillMobTrigger.INSTANCE
+	);
+
 	private static final Map<GrowthPhase, List<AchievementTrigger>> PHASE_BUCKETS = Map.of(
-		GrowthPhase.STONE_AGE, List.of(
-			PlantSeedTrigger.INSTANCE,
-			SleepInBedTrigger.INSTANCE,
-			KillMobTrigger.INSTANCE
-		),
+		GrowthPhase.WOOD_AGE,  EARLY_GAME_TRIGGERS,
+		GrowthPhase.STONE_AGE, EARLY_GAME_TRIGGERS,
 		GrowthPhase.IRON_AGE, List.of(
 			PlantSeedTrigger.INSTANCE,
 			SleepInBedTrigger.INSTANCE,

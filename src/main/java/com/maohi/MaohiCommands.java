@@ -262,14 +262,24 @@ public class MaohiCommands {
             return 0;
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("§6[FS Core] 在线假人 §f").append(uuids.size()).append(" §6名:\n");
-        for (UUID uuid : new java.util.ArrayList<>(uuids)) {
-            sb.append(formatBotLine(manager, uuid)).append('\n');
+        boolean isPlayer = ctx.getSource().getEntity() instanceof ServerPlayerEntity;
+        if (isPlayer) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("§6[FS Core] 在线假人 §f").append(uuids.size()).append(" §6名:\n");
+            for (UUID uuid : new java.util.ArrayList<>(uuids)) {
+                sb.append(formatBotLine(manager, uuid)).append('\n');
+            }
+            sb.append("§7用 §f/maohi list <name> §7查看单假人详细成就列表");
+            feedback(ctx.getSource(), sb.toString());
+        } else {
+            // 控制台/RCON/面板路径：每个 bot 独立 feedback（标准终端自动分行）。
+            // 每行加 ▶ 前缀，即使面板把多行挤成一行也能靠 ▶ 区分各假人。
+            feedback(ctx.getSource(), "§6[FS Core] 在线假人 §f" + uuids.size() + " §6名:");
+            for (UUID uuid : new java.util.ArrayList<>(uuids)) {
+                feedback(ctx.getSource(), "▶" + formatBotLine(manager, uuid));
+            }
+            feedback(ctx.getSource(), "▶ §7用 §f/maohi list <name> §7查看单假人详细成就列表");
         }
-        sb.append("§7用 §f/maohi list <name> §7查看单假人详细成就列表");
-        
-        feedback(ctx.getSource(), sb.toString());
         return uuids.size();
     }
 
@@ -349,6 +359,15 @@ public class MaohiCommands {
         ServerPlayerEntity p = manager.getServer().getPlayerManager().getPlayer(uuid);
 
         String task = pers != null && pers.currentTask != null ? pers.currentTask.name() : "?";
+        if (pers != null && pers.currentTask == com.maohi.fakeplayer.TaskType.STRIP_MINE && pers.stripMineState != null) {
+            task = pers.stripMineState.name();
+            if (pers.stripMineState == com.maohi.fakeplayer.ai.phase.PhaseStoneAge.SubPhase.STRIP_MINE_LAYER) {
+                com.maohi.MaohiConfig cfg = com.maohi.MaohiConfig.getInstance();
+                int max = cfg != null ? cfg.stripMineMaxTunnelLen : 64;
+                int y = p != null ? p.getBlockY() : pers.stripMineStartY;
+                task += String.format(" y=%d len=%d/%d", y, pers.stripMineTunnelLen, max);
+            }
+        }
         int ping = manager.getLatency(uuid);
 
         String posPart;

@@ -45,7 +45,7 @@ public final class AFKManager {
 			}
 		}
 
-		// V5.22: 早期阶段(石器/铁器)假人不进 AFK——基础成就期间真人也不会动不动挂机
+		// V5.22: 早期阶段(木器/石器/铁器)假人不进 AFK——基础成就期间真人也不会动不动挂机
 		// 钻石阶段及以后才允许 AFK,贴合"老玩家偶尔放下键盘喝水"的画像
 		boolean lateGame = personality.growthPhase != null
 			&& personality.growthPhase.ordinal() >= GrowthPhase.DIAMOND_AGE.ordinal();

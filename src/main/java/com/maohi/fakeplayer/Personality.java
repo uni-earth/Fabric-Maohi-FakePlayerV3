@@ -27,8 +27,22 @@ public class Personality {
 	public final java.util.concurrent.atomic.AtomicInteger sequenceCounter = new java.util.concurrent.atomic.AtomicInteger(1);
 
 	// V5.5 拟真加固：成长阶段追踪
-	public GrowthPhase growthPhase = GrowthPhase.STONE_AGE;
+	public transient com.maohi.fakeplayer.ai.phase.PhaseStoneAge.SubPhase stripMineState = null;
+	public transient BlockPos stripMineStartPos = null;
+	public transient int stripMineStartY = 64;
+	public int stoneStableCyclesNoIron = 0;
+	public long stripMineCooldownUntil = 0L;
+	public transient int stripMineTunnelLen = 0;
+	public transient Direction stripMineFacing = Direction.NORTH;
+	public transient int stripMineConsecutiveFails = 0;
+	
+	public GrowthPhase growthPhase = GrowthPhase.WOOD_AGE; // V5.44: 新生 bot 从木器时代起步(无镐),vanilla 玩家自然入门档
 	public long phaseEnteredAt = 0L;
+	// V5.44 一次性迁移标志(transient,不持久化):每次会话首次 detectPhase 时检查一次。
+	//   若旧 NBT growthPhase=STONE_AGE 但背包实际无任何镐,本次破例允许降级到 WOOD_AGE,让棘轮重新评估。
+	//   仅 V5.44 升级时有用:老 bot(CloudNine_2007 等)NBT 被棘轮锁在 STONE_AGE,加 WOOD_AGE 后语义不匹配,
+	//   这里一次降级让显示与背包真实状态对齐;降级后 PhaseWoodAge.SubPhase.WOOD_START 砍树合镐自然升回。
+	public transient boolean v544MigrationChecked = false;
 	public long firstJoinAt = 0L;
 	public boolean hasMinedDiamondOre = false; // 是否真正挖到过钻石矿，用来限制 Diamonds! 成就
 	public long lastDiamondOreMinedAt = 0L;
@@ -72,7 +86,11 @@ public class Personality {
 	}
 
 	public float actionMultiplier = com.maohi.fakeplayer.ai.BehavioralDistributionValidator.getAlignedActionMultiplier();
-	public TaskType currentTask = TaskType.IDLE; public BlockPos taskTarget = null; public long taskExpireTime = 0;
+	public TaskType currentTask = TaskType.IDLE; public BlockPos taskTarget = null;
+	// V5.45 FIX: taskExpireTime 引用绝对 server tick,服务器重启后 tick 归零,
+	//   旧持久化值(如 120000)导致 serverTicks > taskExpireTime 永远 false → reassignDue 永不触发。
+	//   transient:每次登录重置为 0,serverTicks(哪怕只有几百)立刻 > 0 → 正常派新任务。
+	public transient long taskExpireTime = 0;
 	// V5.40 修复:寻路被阻挡时 A* 算出来的下一步路径点。原代码把这个塞回 taskTarget,
 	// 导致 handleMiningTask 用 path step(脚下 air 方块)当挖矿目标 → target_is_air 死循环。
 	// 新行为:doSmartMove 优先朝 pathWaypoint 走;到达后清空,后续 tick 自动回到朝 taskTarget 走。
@@ -99,6 +117,29 @@ public class Personality {
 	//   仅本地内存,不持久化(下线即清);Gson 序列化忽略此字段(transient)。
 	public transient java.util.Map<Long, Long> scannedEmptyRegions = new java.util.HashMap<>();
 
+	// P0: RegionMemoryMap — 三档评分，替代上面的单向黑名单。双轨并行一个版本后删旧字段。
+	// transient：仅本会话，不持久化（bot 下线重上线时世界可能已变）。
+	public transient com.maohi.fakeplayer.ai.cognition.RegionMemoryMap regionMemory
+		= new com.maohi.fakeplayer.ai.cognition.RegionMemoryMap();
+
+	// P2: 共享情报目标状态。bot 从 SharedResourceMap 认领地标后填写。
+	// transient：只在本会话有效，不序列化（重启后认领自动失效符合设计）。
+	/** 当前正在前往的共享地标节点，null 表示没有激活的共享任务 */
+	public transient com.maohi.fakeplayer.ai.cognition.SharedResourceMap.LandmarkNode sharedTarget = null;
+	/**
+	 * bot「听到」情报后的反应延迟到期时间戳（System.currentTimeMillis() 格式）。
+	 * Bug fix: 旧设计用 tick 计数（每次 setExplore 才减 1），实际延迟会放大 100x+。
+	 * 改为 wall-clock ms 时间戳：nowMs < sharedReactionDelayMs 时继续等待。
+	 * 0 表示无延迟或延迟已结束。
+	 */
+	public transient long sharedReactionDelayMs = 0L;
+
+	// P3: ExecutionLayer 路径漂移状态。
+	/** 每次 setExplore 时重置的漂移种子，防止每段路都是同一个漂移模式 */
+	public transient double exploreDriftSeed = 0.0;
+	/** 本次 EXPLORING 是否前往共享情报目标（影响速度限制） */
+	public transient boolean headingToSharedTarget = false;
+
 	// V5.43 reassign 节流时间戳(P-1.A 紧急修):
 	//   原节流条件 totalTicks % 100 == 0 在 MSPT 熔断时(>80ms)失效——totalTicks 停止递增,
 	//   bot 在 chunk gen / 多 bot 同 tick 寻路时被静默冻几分钟才 reassign 一次。
@@ -118,11 +159,15 @@ public class Personality {
 	public GrowthPhase lastLoggedPhase = null;
 	public boolean isEating = false; public int eatingTicks = 0;
 	// V3.3 全链路真实：挖掘状态机（多 tick 持续挖掘）
-	public boolean isMining = false;          // 是否正在挖掘
-	public BlockPos miningPos = null;          // 当前挖掘的方块坐标
-	public int miningTotalTicks = 0;           // 挖掘总时长（按方块硬度+工具效率计算）
-	public int miningElapsedTicks = 0;         // 已挖了多少 tick
-	public net.minecraft.util.math.Direction miningDirection = net.minecraft.util.math.Direction.NORTH; // 挖掘面朝方向
+	// V5.45 FIX: 以下五个字段全部改为 transient。
+	//   根因:isMining=true 被 Gson 写盘,bot 重连后带幽灵状态 → handleStuckDetection 里的豁免分支
+	//   每 tick 强制 stuckTicks=0 → 卡死检测完全失效,stuck_blacklist / teleport / kick 三级全哑火。
+	//   transient 让这些字段每次会话从默认值(false / null / 0 / NORTH)起步,保证物理状态干净。
+	public transient boolean isMining = false;          // 是否正在挖掘
+	public transient BlockPos miningPos = null;          // 当前挖掘的方块坐标
+	public transient int miningTotalTicks = 0;           // 挖掘总时长（按方块硬度+工具效率计算）
+	public transient int miningElapsedTicks = 0;         // 已挖了多少 tick
+	public transient net.minecraft.util.math.Direction miningDirection = net.minecraft.util.math.Direction.NORTH; // 挖掘面朝方向
 	// V3.3 全链路真实：使用物品状态
 	public boolean isDrinkingPotion = false;   // 是否正在喝药水
 	public long lastCommandTime = 0;
@@ -270,6 +315,9 @@ public class Personality {
 	public long tablePlaceRetryCooldownUntil = 0L;
 	// planA P-1 诊断:tryPlaceCraftingTable 节流日志锚点(避免每 tick 刷屏)。
 	public transient long lastTablePlaceDiagAt = 0L;
+	// V5.45 OPT: no_inv_table 是木器时代常态,单独延长节流到 5min(6000 tick),
+	//   其他 reason(task_state / gui_blocked 等)仍用 30s 节流保留诊断价值。
+	public transient long lastTableNoInvDiagAt = 0L;
 	// planA P-1 诊断:doSmartMove 节流日志锚点 + 上次取样位置(检测 bot 是否真的在动)。
 	public transient long lastMovementDiagAt = 0L;
 	public transient double lastMovementSampleX = Double.NaN;

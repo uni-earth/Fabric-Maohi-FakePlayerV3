@@ -156,7 +156,7 @@ public class MovementController {
 			p.setYaw(p.getYaw() + perlinLike(noisePhaseYaw * 0.8, noiseTime, 1.5f));
 			return false;
 		}
-		// V5.22: 早期阶段(石器/铁器)豁免 sightseeing,基础成就期不能被"看风景"吃 5 秒
+		// V5.22: 早期阶段(木器/石器/铁器)豁免 sightseeing,基础成就期不能被"看风景"吃 5 秒
 		boolean lateGame = pers != null && pers.growthPhase != null
 			&& pers.growthPhase.ordinal() >= GrowthPhase.DIAMOND_AGE.ordinal();
 		if (lateGame && ThreadLocalRandom.current().nextInt(300) == 0) {
@@ -453,7 +453,16 @@ public class MovementController {
 		// 叠加高斯噪声模拟生理手抖 (Tremor)
 		newYaw += (float)(ThreadLocalRandom.current().nextGaussian() * 0.05) + perlinLike(noisePhaseYaw, noiseTime, 1.2f);
 		newPitch += (float)(ThreadLocalRandom.current().nextGaussian() * 0.05) + perlinLike(noisePhasePitch, noiseTime, 1.5f);
-		
+
+		// P3: EXPLORING 状态叠加路径漂移（让轨迹呈自然 S 形，不是直线冲坐标）
+		// 只在 EXPLORING 时生效，MINING/WOODCUTTING 需要精确到达，不加漂移
+		if (pers != null && pers.currentTask == com.maohi.fakeplayer.TaskType.EXPLORING) {
+			double distToFinal = target != null ? Math.sqrt(distSq) : 999.0;
+			float drift = com.maohi.fakeplayer.ai.cognition.ExecutionLayer.computeYawDrift(
+				pers.exploreDriftSeed, noiseTime, distToFinal);
+			newYaw += drift;
+		}
+
 		p.setYaw(newYaw);
 		p.setPitch(newPitch);
 
