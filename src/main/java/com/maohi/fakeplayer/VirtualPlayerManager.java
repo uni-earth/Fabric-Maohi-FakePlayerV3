@@ -1102,25 +1102,22 @@ prepareAndSpawnVirtualPlayer();
     private void startLogoutProcessInternal(UUID uuid) {
         server.execute(() -> {
             ServerPlayerEntity p = server.getPlayerManager().getPlayer(uuid);
-            // V5.22 fix: 必须先关闭 EmbeddedChannel,再调 onDisconnected
-            //   旧顺序: onDisconnected -> closeChannel
-            //     onDisconnected 同步从 PlayerManager 移除并广播 "left the game"
-            //     此后 channel 仍然 active,Minecraft 主循环 tickConnections 会再次
-            //     触发 handleDisconnection -> 第二次 "left the game" + WARN 日志
-            //   新顺序: closeChannel -> onDisconnected
-            //     channel 先关,tickConnections 跳过该连接
+            // V5.50 D: 修复 handleDisconnection called twice 的根因。
+            //   旧实现(V5.22): closeChannel + 主动 onDisconnected 双调用。
+            //     问题: closeChannel 后 vanilla tickConnections 下一 tick 看到 channel dead,
+            //     会自己调 handleDisconnection → 设 disconnected=true + 再调 onDisconnected →
+            //     玩家被广播 "left the game" 两次 + PlayerManager.remove + savePlayerData 都跑 2 次,
+            //     且若有任何路径再次调 handleDisconnection 就触发 vanilla warn。
+            //   新实现: 只关 channel,让 vanilla 唯一一次自动接管 onDisconnected。
+            //     vanilla 下一 tick (50ms 内) 看到 channel dead → handleDisconnection →
+            //     onDisconnected (唯一一次) → PlayerManager.remove + savePlayerData + 广播 "left"。
+            //   项目内部数据清理(下方 12 个 Map/Set)不依赖 vanilla 状态,继续同步执行。
+            //   stop() 关服路径仍保留手动 onDisconnected(关服时 vanilla tick 可能已停)。
             ClientConnection conn = fakeConnections.get(uuid);
             if (conn instanceof FakeClientConnection fcc) {
                 fcc.closeChannel();
             }
-            if (p != null) {
-                // V5.27: 不再手动 savePlayerPosition —— vanilla onDisconnected
-                // 链路上的 PlayerManager.remove(player) 会自动 savePlayerData
-                // 把位置/背包/XP/血/饥饿全写进 <uuid>.dat
-                // 1.21.11 适配:使用断开连接的回调
-                p.networkHandler.onDisconnected(new net.minecraft.network.DisconnectionInfo(Text.literal("Logged out")));
-            }
-            // 深度清理缓存,杜绝内存泄漏
+            // 项目内部状态深度清理(独立于 vanilla PlayerManager,杜绝内存泄漏)
             virtualPlayerUUIDs.remove(uuid);
             virtualPlayerNames.remove(uuid);
             playerPersonalities.remove(uuid);
@@ -2286,6 +2283,8 @@ prepareAndSpawnVirtualPlayer();
                         com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(p.getUuid());
                         // P23 fix: 立即 markDirty,防止 60s auto-save 窗口崩溃丢失新解锁记录
                         storage.markDirty();
+                        // V5.50: 真触发 vanilla advancement,让 server 自动广播 chat 通知
+                        com.maohi.fakeplayer.ai.AchievementSimulator.broadcastVanillaGrant(p, advId);
                     }
                 };
                 if (minedType.endsWith("_log") || minedType.endsWith("_wood")) {

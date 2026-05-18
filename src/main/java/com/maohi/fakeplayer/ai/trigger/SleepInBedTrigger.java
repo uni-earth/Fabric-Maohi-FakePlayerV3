@@ -50,7 +50,7 @@ public final class SleepInBedTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		// 节流由 Registry 负责——黑夜窗口本身就很短
 
 		PlayerInventory inv = player.getInventory();
@@ -61,22 +61,25 @@ public final class SleepInBedTrigger implements AchievementTrigger {
 			BlockPos placePos = findPlaceablePos(player);
 			if (placePos != null) {
 				placeBedAndSleep(player, personality, inv, bedSlot, placePos);
-				return;
+				// V5.50: 走完整放床+睡觉序列
+				return true;
 			}
 		}
 
 		// 兜底:附近有现成床 → 走过去用
 		BlockPos existingBed = findExistingBed(player, 10);
-		if (existingBed == null) return;
+		if (existingBed == null) return false;
 		double distSq = player.squaredDistanceTo(Vec3d.ofCenter(existingBed));
 		if (distSq > 16.0) {
 			personality.taskTarget = existingBed;
 			personality.currentTask = TaskType.EXPLORING;
 			personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 600; // 30s = 600 ticks (V5.43.4 ms→tick)
 			personality.pendingBedInteraction = existingBed;
-			return;
+			return false;
 		}
 		interactBed(player, existingBed);
+		// V5.50: 真交互了现成床
+		return true;
 	}
 
 	private static void placeBedAndSleep(ServerPlayerEntity player, Personality personality,

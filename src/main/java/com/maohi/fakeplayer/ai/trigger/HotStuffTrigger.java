@@ -40,18 +40,18 @@ public final class HotStuffTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		// 节流由 Registry 负责,这里直接执行
 
 		PlayerInventory inv = player.getInventory();
 		int bucketSlot = TriggerUtil.findItemSlot(inv, Items.BUCKET);
-		if (bucketSlot == -1) return;
-		if (TriggerUtil.hasItem(inv, Items.LAVA_BUCKET)) return;
+		if (bucketSlot == -1) return false;
+		if (TriggerUtil.hasItem(inv, Items.LAVA_BUCKET)) return false;
 
 		// V5.28.6 P2-Scan: 岩浆扫描半径 8 → 5,与统一 scan radii 一致
 		//   岩浆是危险源,扫描半径与"近距离触发"绑定:>5 格再走过去开桶反而加风险(中途掉进岩浆)
 		BlockPos lavaPos = findNearbyLavaSource(player, 5);
-		if (lavaPos == null) return;
+		if (lavaPos == null) return false;
 
 		// 距离 > 4 时先派任务走过去,下次 roll 命中再尝试交互
 		double distSq = player.squaredDistanceTo(Vec3d.ofCenter(lavaPos));
@@ -59,7 +59,7 @@ public final class HotStuffTrigger implements AchievementTrigger {
 			personality.taskTarget = lavaPos;
 			personality.currentTask = TaskType.EXPLORING;
 			personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 600; // 30s = 600 ticks (V5.43.4 ms→tick)
-			return;
+			return false;
 		}
 
 		// 切到空桶 → 朝岩浆看 → 真实发包交互
@@ -74,6 +74,8 @@ public final class HotStuffTrigger implements AchievementTrigger {
 
 		BlockHitResult hit = new BlockHitResult(targetCenter, Direction.UP, lavaPos, false);
 		PacketHelper.interactBlock(player, Hand.MAIN_HAND, hit);
+		// V5.50: 已发完整套舀岩浆动作链 → Registry 据此调 broadcastVanillaGrant
+		return true;
 	}
 
 	/** 在 player 周围 radius 格内扫一个 still lava 源方块 */

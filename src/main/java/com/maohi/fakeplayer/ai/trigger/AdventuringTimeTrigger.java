@@ -35,9 +35,13 @@ public final class AdventuringTimeTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		recordCurrentBiome(player, personality);
 		tryLongDistanceTrip(player, personality);
+		// V5.50: AdventuringTime 是 vanilla 累计型(50+ 群系),trigger 只负责记录 + 偶发长途旅行;
+		//   advancement 完成由 vanilla 内部 location criterion 在玩家进入新群系时自然累积 fire,
+		//   不需要 trigger 自己 grant。永远返 false。
+		return false;
 	}
 
 	/** 记录一次当前群系(Registry 级节流已命中,这里直接记) */

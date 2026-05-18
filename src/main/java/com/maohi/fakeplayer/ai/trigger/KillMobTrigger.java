@@ -46,23 +46,28 @@ public final class KillMobTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		// 节流由 Registry 负责
 
 		// 假人当前已经在 HUNTING 就让它打,别打断
-		if (personality.currentTask == TaskType.HUNTING) return;
+		if (personality.currentTask == TaskType.HUNTING) return false;
 
 		// 必须有近战武器,否则徒手打很慢且容易被反杀
-		if (!hasMeleeWeapon(player)) return;
+		if (!hasMeleeWeapon(player)) return false;
 
 		// 16 格内有低难度敌对生物就锁定
 		HostileEntity target = findEasyHostile(player);
-		if (target == null) return;
+		if (target == null) return false;
 
 		personality.currentTask = TaskType.HUNTING;
 		personality.huntTargetUuid = target.getUuid();
 		personality.taskTarget = target.getBlockPos();
 		personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 1200; // 60s = 1200 ticks (V5.43.4 ms→tick)
+		// V5.50: 本 trigger 只分配 HUNTING 任务,实际杀戮由 HUNTING 链路 attackEntity 完成;
+		//   vanilla player_killed_entity criterion 在击杀那一刻自然 fire 广播,
+		//   AchievementSimulator.observeStatMilestones 也会兜底用 stat=mob_kills 触发 grant。
+		//   本 trigger 不该 grant,返 false。
+		return false;
 	}
 
 	/** 任意木/石/铁/钻/下界合金剑 + 任何斧子也可作为武器 */

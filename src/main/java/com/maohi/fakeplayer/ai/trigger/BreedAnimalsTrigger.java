@@ -42,7 +42,7 @@ public final class BreedAnimalsTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		// 节流由 Registry 负责
 
 		PlayerInventory inv = player.getInventory();
@@ -58,14 +58,14 @@ public final class BreedAnimalsTrigger implements AchievementTrigger {
 			food = Items.CARROT;
 			targetType = net.minecraft.entity.passive.PigEntity.class;
 		} else {
-			return;
+			return false;
 		}
 
 		// 8 格内扫成年同类动物
 		Box box = player.getBoundingBox().expand(8.0);
 		List<? extends AnimalEntity> animals = player.getEntityWorld().getEntitiesByClass(
 			targetType, box, e -> e.isAlive() && !e.isBaby() && e.getBreedingAge() == 0);
-		if (animals.size() < 2) return;
+		if (animals.size() < 2) return false;
 
 		// 切到饲料槽位
 		int foodSlot = TriggerUtil.findItemSlot(inv, food);
@@ -81,12 +81,14 @@ public final class BreedAnimalsTrigger implements AchievementTrigger {
 			personality.taskTarget = first.getBlockPos();
 			personality.currentTask = TaskType.EXPLORING;
 			personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 600; // 30s = 600 ticks (V5.43.4 ms→tick)
-			return;
+			return false;
 		}
 
 		// vanilla AnimalEntity.interactMob:消耗饲料 + love mode + 触发繁殖
 		// 不读返回值——ActionResult API 在 1.21.x 多次重构,避免版本耦合
 		first.interactMob(player, Hand.MAIN_HAND);
 		player.swingHand(Hand.MAIN_HAND, true);
+		// V5.50: 已对动物发出完整喂食交互 → Registry 据此调 broadcastVanillaGrant
+		return true;
 	}
 }

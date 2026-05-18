@@ -546,6 +546,8 @@ public final class CraftingBehavior {
 			// P23 fix: 立即 markDirty,防止 60s auto-save 窗口崩溃丢失新解锁记录
 			com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
 			if (mgr != null) mgr.markStorageDirty();
+			// V5.50: 真触发 vanilla advancement,让 server 自动广播 chat 通知
+			com.maohi.fakeplayer.ai.AchievementSimulator.broadcastVanillaGrant(player, advId);
 		}
 
 		// P22 vanilla 官方 Criteria.INVENTORY_CHANGED trigger:让 vanilla advancement 系统

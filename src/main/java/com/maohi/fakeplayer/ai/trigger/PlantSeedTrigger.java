@@ -46,7 +46,7 @@ public final class PlantSeedTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		// 节流由 Registry 负责
 
 		PlayerInventory inv = player.getInventory();
@@ -58,22 +58,22 @@ public final class PlantSeedTrigger implements AchievementTrigger {
 			seedSlot = TriggerUtil.findItemSlot(inv, Items.BEETROOT_SEEDS);
 			seedItem = Items.BEETROOT_SEEDS;
 		}
-		if (seedSlot == -1) return;
+		if (seedSlot == -1) return false;
 
 		// 必须有锄头才能开耕地
 		int hoeSlot = findHoeSlot(inv);
-		if (hoeSlot == -1) return;
+		if (hoeSlot == -1) return false;
 
 		// 找附近草方块——种子只能种在 farmland 上,grass→farmland 用锄头转
 		BlockPos grass = findGrassBlock(player, 5);
-		if (grass == null) return;
+		if (grass == null) return false;
 
 		// 远了先派任务走过去
 		if (player.squaredDistanceTo(Vec3d.ofCenter(grass)) > 16.0) {
 			personality.taskTarget = grass;
 			personality.currentTask = TaskType.EXPLORING;
 			personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 600; // 30s = 600 ticks (V5.43.4 ms→tick)
-			return;
+			return false;
 		}
 
 		Vec3d grassTopCenter = Vec3d.ofCenter(grass.up()).subtract(0, 0.5, 0);
@@ -91,13 +91,16 @@ public final class PlantSeedTrigger implements AchievementTrigger {
 		// Step 2: 切种子,右键 farmland → 种植成 wheat[age=0]
 		// 重新查 seedSlot——swapToHotbar 上面可能已挪动
 		seedSlot = TriggerUtil.findItemSlot(inv, seedItem);
-		if (seedSlot == -1) return;
+		if (seedSlot == -1) return false;
 		if (seedSlot >= 9) {
 			TriggerUtil.swapToHotbar(player, seedSlot, 1);
 			seedSlot = 1;
 		}
 		PacketHelper.setSelectedSlot(player, seedSlot);
 		PacketHelper.interactBlock(player, Hand.MAIN_HAND, hit);
+
+		// V5.50: 走完完整锄草+种种子序列 → Registry 据此调 broadcastVanillaGrant 触发广播
+		return true;
 	}
 
 	/** 找任意材质锄头(wooden/stone/iron/...) */

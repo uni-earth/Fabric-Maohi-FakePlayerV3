@@ -84,18 +84,18 @@ public final class EnchantItemTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		// 1. 物品/lapis/经验 三项前置
 		PlayerInventory inv = player.getInventory();
 		int itemSlot = findEnchantableItemSlot(inv);
-		if (itemSlot == -1) return;
+		if (itemSlot == -1) return false;
 		int lapisSlot = TriggerUtil.findItemSlot(inv, Items.LAPIS_LAZULI);
-		if (lapisSlot == -1) return;
-		if (player.experienceLevel < 1) return;
+		if (lapisSlot == -1) return false;
+		if (player.experienceLevel < 1) return false;
 
 		// 2. 找附魔台
 		BlockPos tablePos = findEnchantingTable(player, TABLE_SCAN_RADIUS);
-		if (tablePos == null) return;
+		if (tablePos == null) return false;
 
 		// 3. 距离 > 4 → 走过去,下次 roll 再交互
 		Vec3d tableCenter = Vec3d.ofCenter(tablePos);
@@ -104,7 +104,7 @@ public final class EnchantItemTrigger implements AchievementTrigger {
 			personality.taskTarget = tablePos;
 			personality.currentTask = TaskType.EXPLORING;
 			personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + WALK_TIMEOUT_TICKS;
-			return;
+			return false;
 		}
 
 		// 4. 朝附魔台看 + 真实 interactBlock 包打开界面(走 vanilla onPlayerInteractBlock 主路径)
@@ -121,7 +121,7 @@ public final class EnchantItemTrigger implements AchievementTrigger {
 			if (player.currentScreenHandler != player.playerScreenHandler) {
 				InventoryActionHelper.closeScreen(player);
 			}
-			return;
+			return false;
 		}
 
 		// 6. 真协议化:把 1 件物品 + 1 lapis 搬到 handler 输入槽
@@ -132,31 +132,27 @@ public final class EnchantItemTrigger implements AchievementTrigger {
 		int lapisScreenSlot = InventoryActionHelper.playerInvSlotToScreenSlot(handler, lapisSlot);
 		if (itemScreenSlot < 0 || lapisScreenSlot < 0) {
 			InventoryActionHelper.closeScreen(player);
-			return;
+			return false;
 		}
 		moveOne(player, itemScreenSlot, 0);   // item → enchant input
 		moveOne(player, lapisScreenSlot, 1);  // lapis → enchant lapis slot
 
+		// V5.50: 记下 clickButton 前的 XP 等级,用以判断附魔是否真生效(0 书架场景 vanilla
+		//   会拒绝 onButtonClick → XP 不变 → 本次未真完成 → return false 不该广播)
+		int xpBefore = player.experienceLevel;
+
 		// 7. 点 button id=0(最低档:1 lapis,1 级 XP) — 真实 ButtonClickC2SPacket
-		//    server-side onButtonClick 同步执行:
-		//    - 计算附魔(基于 enchantmentPower[] / enchantmentSeed)
-		//    - handler[0] 替换为 enchanted_item(book → enchanted_book)
-		//    - handler[1] 减 1 lapis
-		//    - player.experienceLevel -= (button id + 1)
-		//    - Criteria.ENCHANTED_ITEM trigger → story/enchant_item 解锁
-		//    失败时(0 书架 power[0]==0)handler 槽不变,仅光标/界面状态保持
 		InventoryActionHelper.clickButton(player, 0);
 
 		// 8. QUICK_MOVE 把 handler 槽 0/1 残留(成功:enchanted_item;失败:原物品+lapis)还回背包
-		//    vanilla quickMove 自动找空 inv 槽
 		InventoryActionHelper.quickMove(player, 0);
 		InventoryActionHelper.quickMove(player, 1);
 
 		// 9. 关界面 — 与开界面的 interactBlock 包配对的 CloseHandledScreenC2SPacket
 		InventoryActionHelper.closeScreen(player);
 
-		// 静音失败:0 书架场景 onButtonClick 不会改变 handler 槽,QUICK_MOVE 把原物品搬回即可
-		// (TriggerRegistry 已用 try/catch 兜底,这里也不抛异常)
+		// V5.50: XP 减少 = 附魔真生效 = 该广播;XP 不变 = 0 书架失败 = 别广播
+		return player.experienceLevel < xpBefore;
 	}
 
 	/**
