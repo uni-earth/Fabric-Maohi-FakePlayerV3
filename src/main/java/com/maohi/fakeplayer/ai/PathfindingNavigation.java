@@ -318,6 +318,8 @@ public class PathfindingNavigation {
 				// 修复:在 A* 阶段直接拒绝此节点,让搜索绕道或放弃。
 				// 注:悬空平台(foot-level 格为空气)不会被拒绝——canJump 在那种地形也是 false 但
 				//   bot 实际上会走平路绕过去,不会形成循环。
+				// V5.46:本检查同时覆盖对角 up(2) — destination XZ 是对角格,footTransit 在
+				//   该对角格的脚位,语义一致 (内角处堵死同样拦截)。
 				if (nb.pos.getY() - current.pos.getY() == 2) {
 					// foot-level 水平过渡格:与 nb 同 XZ,与 current 同 Y
 					BlockPos footTransit = new BlockPos(nb.pos.getX(), current.pos.getY(), nb.pos.getZ());
@@ -325,6 +327,11 @@ public class PathfindingNavigation {
 					// 固体碰撞体积存在 → 崖壁底部被封死 → 拒绝此 up(2) 邻居
 					if (!footState.getCollisionShape(world, footTransit).isEmpty()) continue;
 				}
+
+				// V5.46 Baritone-style 对角 up(N) 内角卡身检查:
+				//   diagonal up(1)/up(2) 邻居需额外校验对角两侧 cardinal 中间格至少一侧通透,
+				//   避免 0.6 宽 hitbox 在双侧封死的内凹墙角对角通行时撞墙原地不动。
+				if (!isDiagonalUpReachable(world, current.pos, nb.pos)) continue;
 
 				double newF = tentativeG + heuristic(nb.pos, goal);
 				AStarNode neighborNode = new AStarNode(nb.pos, tentativeG, newF, current);
@@ -412,8 +419,64 @@ public class PathfindingNavigation {
 			new Neighbor(pos.north().up(2), 2.5),
 			new Neighbor(pos.south().up(2), 2.5),
 			new Neighbor(pos.east().up(2), 2.5),
-			new Neighbor(pos.west().up(2), 2.5)
+			new Neighbor(pos.west().up(2), 2.5),
+			// V5.46 Baritone-style 对角上一阶: 解决 5-Y 悬崖陷阱(bot 在山脚扫到山顶树 dy>4
+			//   永远走不到的死循环)。让 A* 能拼出"沿坡螺旋爬阶"的路径,而非只能直上直下。
+			//   cost 2.0 介于平地对角等效(走 N→E 两步 cost 2.0) 与 直上 up(1)+平 1 步 (1.5+1=2.5) 之间;
+			//   对角 up(1) 兼顾水平进度 + 1 格爬升,适合自然山势的台阶状斜坡。
+			//   物理可达性:由 isDiagonalUpReachable 在 A* 主循环内查 cardinal 两侧
+			//   至少一侧通透(避免 cliff 内凹墙角 0.6 hitbox 卡身)。
+			new Neighbor(pos.north().east().up(), 2.0),
+			new Neighbor(pos.north().west().up(), 2.0),
+			new Neighbor(pos.south().east().up(), 2.0),
+			new Neighbor(pos.south().west().up(), 2.0),
+			// V5.46 对角上 2 阶:跨越 2 格高差的对角台阶(常见于自然生成山势的台阶式岩面)。
+			//   cost 3.5 > 直上 up(2) 2.5 + 平 1 cost = 3.5,平局让 A* 优先直上;只在
+			//   直上 footTransit 被堵 / 对角能绕开时才被选中。
+			//   doSmartMove 执行:面向对角 waypoint,vanilla 物理对 2 格高差走 jump→上一阶→再 jump
+			//   的多 tick 链路自然成立(同直上 up(2))。
+			new Neighbor(pos.north().east().up(2), 3.5),
+			new Neighbor(pos.north().west().up(2), 3.5),
+			new Neighbor(pos.south().east().up(2), 3.5),
+			new Neighbor(pos.south().west().up(2), 3.5)
 		};
+	}
+
+	/**
+	 * V5.46 Baritone-style 对角 up(N) 邻居物理可达性检查:
+	 *   bot bounding box 0.6×1.8×0.6,对角通行时身体扫过 2 个 cardinal 中间格 (N/S 投影 与 E/W 投影)。
+	 *   若 from→to 在 from.Y 到 to.Y 任一层 Y 都「两侧 cardinal 中间格都被实体方块封死」,
+	 *   则 bot 必撞内凹墙角无法对角穿过,直接拒绝该邻居。
+	 *
+	 *   非对角 up 邻居 (cardinal / 平地 / 下台阶) 不查 — 返 true 跳过。
+	 *
+	 * @param from 当前节点 (含 Y)
+	 * @param to   候选邻居 (含 Y)
+	 * @return true 表示对角通行可达 (或不是对角 up 邻居,跳过)
+	 */
+	private static boolean isDiagonalUpReachable(ServerWorld world, BlockPos from, BlockPos to) {
+		int dx = to.getX() - from.getX();
+		int dz = to.getZ() - from.getZ();
+		int dy = to.getY() - from.getY();
+		// 仅校验对角 up(N):xz 各 ±1 且 y >= 1。其它形态返 true 直接通过
+		if (Math.abs(dx) != 1 || Math.abs(dz) != 1) return true;
+		if (dy < 1) return true;
+
+		// from 处出发的两个 cardinal 中间格 (沿 x 与沿 z 方向投影)
+		BlockPos midX = new BlockPos(from.getX() + dx, from.getY(), from.getZ());
+		BlockPos midZ = new BlockPos(from.getX(), from.getY(), from.getZ() + dz);
+
+		// 在 from.Y 到 to.Y 每一层 Y 查:两侧 cardinal 中间格至少一侧通透 (collision empty)
+		for (int yOff = 0; yOff <= dy; yOff++) {
+			BlockPos checkX = midX.up(yOff);
+			BlockPos checkZ = midZ.up(yOff);
+			net.minecraft.block.BlockState sX = world.getBlockState(checkX);
+			net.minecraft.block.BlockState sZ = world.getBlockState(checkZ);
+			boolean blockedX = !sX.getCollisionShape(world, checkX).isEmpty();
+			boolean blockedZ = !sZ.getCollisionShape(world, checkZ).isEmpty();
+			if (blockedX && blockedZ) return false; // 两侧都封死 → 对角通行受阻
+		}
+		return true;
 	}
 
 	/**
