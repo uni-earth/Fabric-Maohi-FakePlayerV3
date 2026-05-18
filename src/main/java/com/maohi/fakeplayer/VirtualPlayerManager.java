@@ -188,7 +188,14 @@ public class VirtualPlayerManager {
                 // worldSpawn 反射读取(与 PlayerSpawner 同语义,跨 yarn 兼容)
                 net.minecraft.util.math.BlockPos spawn = readWorldSpawnSafe(overworld);
                 int blockRadius = readSpawnRadiusSafe(overworld);
-                int chunkRadius = Math.max(1, (blockRadius + 15) / 16);
+                // V5.49: chunkRadius 至少 2(5×5=25 chunks)。
+                //   旧 max(1, ...) → 默认 blockRadius=10 时只预热 3×3=9 chunks。pickScatteredSpawn 选到
+                //   边缘 chunk(如 (-1,0))时,vanilla getChunk(FULL,true) 会 cascade 加载邻居 chunks
+                //   ((-2,*)) 用于 lighting/structures,这些 3×3 之外是冷的,触发同步 chunk gen 3×~1.5s
+                //   = 5s 主线程阻塞(实测 DragonSneaky pickPos=5001ms)。
+                //   扩到 5×5 给候选 chunk(-1..1) 留 1 格邻居 buffer,cascade 永远命中热 chunk。
+                //   代价:多 16 chunks 常驻 ≈ +5MB 内存,远低于一次 5s lag burst 的体感成本。
+                int chunkRadius = Math.max(2, (blockRadius + 15) / 16 + 1);
                 int spawnChunkX = spawn.getX() >> 4;
                 int spawnChunkZ = spawn.getZ() >> 4;
                 int issued = 0;
@@ -217,9 +224,11 @@ public class VirtualPlayerManager {
                         Thread.sleep(200L);
                     }
                 }
-                org.slf4j.LoggerFactory.getLogger("Server thread").info(
-                    "[MaohiTask] spawn_chunks_preheat scheduled chunks={} radius={} center=({},{})",
-                    issued, chunkRadius, spawnChunkX, spawnChunkZ);
+                // V5.49: 改走 TaskLogger,受 debugVirtualTasks 开关控制
+                com.maohi.fakeplayer.TaskLogger.logRaw("SYSTEM", "spawn_chunks_preheat",
+                    "chunks", issued,
+                    "radius", chunkRadius,
+                    "center", "(" + spawnChunkX + "," + spawnChunkZ + ")");
             } catch (InterruptedException ie) {
                 // 关服中断,正常退出
             } catch (Throwable t) {

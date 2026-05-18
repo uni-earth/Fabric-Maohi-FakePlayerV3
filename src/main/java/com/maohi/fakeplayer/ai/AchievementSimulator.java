@@ -318,9 +318,13 @@ public final class AchievementSimulator {
 				sample.add(e.id().toString());
 				if (++count >= 30) break;
 			}
-			org.slf4j.LoggerFactory.getLogger("Server thread").info(
-				"[MaohiTask] enumerate_loader_dump loaderClass={} path={} err={} size={} sample={}",
-				loaderClassName, diagPath, diagErr, result.size(), sample);
+			// V5.49: 改走 TaskLogger,受 debugVirtualTasks 开关控制
+			com.maohi.fakeplayer.TaskLogger.logRaw("SYSTEM", "enumerate_loader_dump",
+				"loaderClass", loaderClassName,
+				"path", diagPath,
+				"err", diagErr,
+				"size", result.size(),
+				"sample", sample);
 		}
 
 		return result;

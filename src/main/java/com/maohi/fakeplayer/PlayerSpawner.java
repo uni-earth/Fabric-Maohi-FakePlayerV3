@@ -136,13 +136,12 @@ public class PlayerSpawner {
 			0.0F,
 			0.0F);
 		// V5.38 调试 log:每次 spawn 都打,验证 base 缓存稳定(同一值)、final 散开(每个 bot 不同)
-		org.slf4j.LoggerFactory.getLogger("Server thread").info(
-			"[MaohiTask] [{}] spawn_pos base=({},{},{}) radius={} final=({},{},{}) playerPos=({},{},{})",
-			name,
-			basePos.getX(), basePos.getY(), basePos.getZ(),
-			spawnRadius,
-			finalPos.getX(), finalPos.getY(), finalPos.getZ(),
-			player.getX(), player.getY(), player.getZ());
+		// V5.49: 改走 TaskLogger,受 debugVirtualTasks 开关控制
+		TaskLogger.logRaw(name, "spawn_pos",
+			"base", "(" + basePos.getX() + "," + basePos.getY() + "," + basePos.getZ() + ")",
+			"radius", spawnRadius,
+			"final", "(" + finalPos.getX() + "," + finalPos.getY() + "," + finalPos.getZ() + ")",
+			"playerPos", "(" + player.getX() + "," + player.getY() + "," + player.getZ() + ")");
 	}
 
 	ClientConnection conn = new FakeClientConnection();
@@ -226,17 +225,15 @@ public class PlayerSpawner {
         // 注册到管理器
         manager.registerSpawnedPlayer(player, conn, name, saved);
 
-        // P18: spawn 各阶段耗时诊断
+        // P18: spawn 各阶段耗时诊断 — V5.49: 改走 TaskLogger,受 debugVirtualTasks 开关控制
         long t5 = System.nanoTime();
-        org.slf4j.LoggerFactory.getLogger("Server thread").info(
-            "[MaohiTask] [{}] spawn_timing total={}ms pre={}ms entityCtor={}ms pickPos={}ms onPlayerConnect={}ms postInit={}ms",
-            name,
-            (t5 - t0) / 1_000_000,
-            (t1 - t0) / 1_000_000,
-            (t2 - t1) / 1_000_000,
-            (t3 - t2) / 1_000_000,
-            (t4 - t3) / 1_000_000,
-            (t5 - t4) / 1_000_000);
+        TaskLogger.logRaw(name, "spawn_timing",
+            "total", (t5 - t0) / 1_000_000 + "ms",
+            "pre", (t1 - t0) / 1_000_000 + "ms",
+            "entityCtor", (t2 - t1) / 1_000_000 + "ms",
+            "pickPos", (t3 - t2) / 1_000_000 + "ms",
+            "onPlayerConnect", (t4 - t3) / 1_000_000 + "ms",
+            "postInit", (t5 - t4) / 1_000_000 + "ms");
     }
 
     /**
@@ -328,19 +325,12 @@ public class PlayerSpawner {
         if (radius <= 0) return base;
         java.util.concurrent.ThreadLocalRandom rng = java.util.concurrent.ThreadLocalRandom.current();
 
-        // P25: P15 完全关闭同步加载(syncLoadsRemaining=0)被本次跑测推翻 —— 实际上
-        //   getSafeSpawnY 用 ChunkStatus.FULL force=false 查询,spawn-chunk ticket 加载到的
-        //   chunk 在 spawn 阶段可能还在 lighting/structure gen,FULL status 未到 → 50 次 attempt
-        //   全部走 line 362 continue → 触发 fallback line 372-377,fallback 的 getSafeSpawnY
-        //   依然要 FULL status,未加载就返 base.y=64。
-        //   日志证据(2026-05-15): 4 bot spawn final y 全是 63/64,实际 surface y=52~53,
-        //     bot spawn 后立刻 sink_guard from_y=52~53(SwiftArcher51/QuietMiner28/Ava2011/Wild123)。
-        //
-        //   折衷:恢复 syncLoadsRemaining = 1。
-        //   - 1 次同步加载 ~500-700ms wall-clock(单 chunk gen),比 P12 的 3 次 2216ms 轻 3 倍
-        //   - 大概率第 1 次 attempt 命中,后 49 次走 isChunkLoaded 不阻塞
-        //   - 即便单 chunk 加载失败,fallback 至少有 1 次真实 heightmap 数据,比纯 fallback 强
-        int syncLoadsRemaining = 1;
+        // V5.49: 删除 syncLoadsRemaining 同步加载分支。
+        //   VirtualPlayerManager.startSpawnChunksPreheat 已经用 setChunkForced 把 spawn area
+        //   5×5=25 chunks 永驻(FORCED ticket),pickScatteredSpawn 命中的 chunks 必然已加载。
+        //   旧代码 getChunk(cx, cz, FULL, true) 在冷邻居场景下会 cascade 同步 gen,正是
+        //   DragonSneaky pickPos=5001ms 的元凶。改为纯 isChunkLoaded 判断,主线程绝不阻塞。
+        //   未命中(罕见,setChunkForced 调度滞后期):continue 重试或走 fallback。
 
         for (int attempt = 0; attempt < 50; attempt++) {
             double angle = rng.nextDouble() * Math.PI * 2.0;
@@ -352,22 +342,10 @@ public class PlayerSpawner {
             int candidateX = base.getX() + (int) Math.round(Math.cos(angle) * distance);
             int candidateZ = base.getZ() + (int) Math.round(Math.sin(angle) * distance);
 
-            // P12: chunk 可用性检查——前几次允许同步加载，之后只用已加载的
             int chunkX = candidateX >> 4;
             int chunkZ = candidateZ >> 4;
-            if (syncLoadsRemaining > 0) {
-                // 允许同步加载：保证至少有几个 chunk 的真实 heightmap 数据
-                try {
-                    world.getChunkManager().getChunk(chunkX, chunkZ,
-                        net.minecraft.world.chunk.ChunkStatus.FULL, true);
-                    syncLoadsRemaining--;
-                } catch (Throwable ignored) {
-                    continue;
-                }
-            } else {
-                // 耗尽同步配额：只检查已加载的 chunk，跳过未加载的
-                if (!world.isChunkLoaded(chunkX, chunkZ)) continue;
-            }
+            // V5.49: 只用已加载的 chunk,绝不同步加载(避免冷邻居 cascade)
+            if (!world.isChunkLoaded(chunkX, chunkZ)) continue;
 
             // V5.40: getSafeSpawnY 用 NO_LEAVES heightmap,跳过树叶落到真实地表;
             // 否则森林环境 bot spawn 在 y=80+ 树冠层,被叶子包住走不出,task 全部 fail。
@@ -390,10 +368,9 @@ public class PlayerSpawner {
         double finalDist = 5.0 + rng.nextDouble() * (radius + 20.0);
         int fx = base.getX() + (int) Math.round(Math.cos(finalAngle) * finalDist);
         int fz = base.getZ() + (int) Math.round(Math.sin(finalAngle) * finalDist);
-        try {
-            world.getChunkManager().getChunk(fx >> 4, fz >> 4,
-                net.minecraft.world.chunk.ChunkStatus.FULL, true);
-        } catch (Throwable ignored) { /* 加载失败也接受,下面 getSafeSpawnY 走 fallback */ }
+        // V5.49: 删除 fallback 里的 getChunk(FULL,true) — 与上面同因,避免冷 chunk cascade 阻塞主线程。
+        //   50 次 attempt 全失败才走到这里(FORCED 25 chunks 覆盖下,实测从未达成),即便 fy 取
+        //   getSafeSpawnY fallback 值不准,后续 sink_guard 会在第一帧校正,代价 ~1-2 tick。
         int fy = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeSpawnY(world, fx, fz, base.getY());
         return new net.minecraft.util.math.BlockPos(fx, fy, fz);
     }
