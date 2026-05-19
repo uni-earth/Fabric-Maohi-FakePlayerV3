@@ -20,8 +20,14 @@ import net.minecraft.server.network.ServerPlayerEntity;
  *   - trigger/  可选成就的主动刷取,每个独立周期性 tick
  *   - 长线状态机(BeaconQuest / VillageDefender)保持在 ai/ 根,跨 tick 状态不适合本接口
  *
- * 触发方式:vanilla advancement 系统会因假人执行真实行为(交互方块/use 物品/喂动物等)
- *          自动 fire,本接口实现绝不调用 grantCriterion——保持"无法被反作弊检测出伪造"。
+ * 触发方式:bot 在 tryTrigger 内部走 vanilla 协议执行真实行为(交互方块 / use 物品 /
+ *          喂动物等)。理想上 vanilla advancement 系统会因此自动 fire criterion 广播,
+ *          但 P23 实测 vanilla criterion 对 fake player 不可靠 —— 项目自己在
+ *          AchievementSimulator.broadcastVanillaGrant 路径上补 grant 触发广播。
+ *
+ *   何时补 grant 由 tryTrigger 的返回值决定:
+ *     true  = bot 真把所有动作做完了(走完整条 trigger 序列) → Registry 自动调 broadcastVanillaGrant
+ *     false = 前置不满足提前 return(没物品 / 没场景 / 还在赶路) → 不 grant 不广播
  */
 public interface AchievementTrigger {
 
@@ -51,11 +57,14 @@ public interface AchievementTrigger {
 
 	/**
 	 * 实际触发逻辑。实现方应自行处理:
-	 *   - 检查物品/方块/实体是否存在
+	 *   - 检查物品/方块/实体是否存在(不满足 → return false)
 	 *   - 真实发包(PacketHelper.interactBlock / useItem / attackEntity)
+	 *   - 完整执行所有动作链 → return true(Registry 据此调 broadcastVanillaGrant)
 	 *   - 失败安静返回,不抛异常,不写日志
 	 * 细粒度概率(如"走进场景也只 20% 真去做")放在这里。
+	 *
+	 * @return true 表示 bot 完整执行了动作链(应广播);false 表示前置不满足提前退出(别广播)
 	 */
-	void tryTrigger(ServerPlayerEntity player, Personality personality);
+	boolean tryTrigger(ServerPlayerEntity player, Personality personality);
 }
 

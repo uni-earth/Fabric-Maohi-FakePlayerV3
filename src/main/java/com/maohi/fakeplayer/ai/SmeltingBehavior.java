@@ -199,6 +199,8 @@ public final class SmeltingBehavior {
 			com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(player.getUuid());
 			com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
 			if (mgr != null) mgr.markStorageDirty();
+			// V5.50: 真触发 vanilla advancement,让 server 自动广播 chat 通知
+			com.maohi.fakeplayer.ai.AchievementSimulator.broadcastVanillaGrant(player, "story/smelt_iron");
 		}
 	}
 

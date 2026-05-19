@@ -56,22 +56,26 @@ public final class BlazeRodTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		// 1. 已在 HUNTING 就别打断 — 让现有战斗链路解决当前目标
-		if (personality.currentTask == TaskType.HUNTING) return;
+		if (personality.currentTask == TaskType.HUNTING) return false;
 
 		// 2. 必须有武器,徒手干烈焰人是送
-		if (!hasNetherCombatGear(player)) return;
+		if (!hasNetherCombatGear(player)) return false;
 
 		// 3. 找最近的 alive BlazeEntity
 		BlazeEntity target = findClosestBlaze(player);
-		if (target == null) return;
+		if (target == null) return false;
 
 		// 4. 锁定 HUNTING — 战斗链路(CombatReflex/PvpSparring 等)会接管攻击
 		personality.currentTask = TaskType.HUNTING;
 		personality.huntTargetUuid = target.getUuid();
 		personality.taskTarget = target.getBlockPos();
 		personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + HUNT_TIMEOUT_TICKS;
+		// V5.50: 本 trigger 只分配 HUNTING 任务,实际击杀烈焰人 + 拾起 blaze_rod 由后续 attackEntity
+		//   完成,vanilla inventory_changed criterion 在 blaze_rod 入背包时自然 fire 广播。
+		//   本 trigger 不该 grant,返 false。
+		return false;
 	}
 
 	/**

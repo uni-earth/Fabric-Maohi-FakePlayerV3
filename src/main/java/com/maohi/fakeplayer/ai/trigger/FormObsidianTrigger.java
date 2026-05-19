@@ -66,15 +66,15 @@ public final class FormObsidianTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		PlayerInventory inv = player.getInventory();
 		// 1. 必须有 water_bucket(干桶不行,需要倒水)
 		int waterBucketSlot = TriggerUtil.findItemSlot(inv, Items.WATER_BUCKET);
-		if (waterBucketSlot == -1) return;
+		if (waterBucketSlot == -1) return false;
 
 		// 2. 找远离自己的 still lava 源
 		BlockPos lavaPos = findNearbyLavaSource(player, LAVA_SCAN_RADIUS);
-		if (lavaPos == null) return;
+		if (lavaPos == null) return false;
 
 		// 3. 距离 > 4 → 先走过去,下次 roll 再尝试交互
 		double distSq = player.squaredDistanceTo(Vec3d.ofCenter(lavaPos));
@@ -82,7 +82,7 @@ public final class FormObsidianTrigger implements AchievementTrigger {
 			personality.taskTarget = lavaPos;
 			personality.currentTask = TaskType.EXPLORING;
 			personality.taskExpireTime = player.getEntityWorld().getServer().getTicks() + 600; // 30s = 600 ticks (V5.43.4 ms→tick)
-			return;
+			return false;
 		}
 
 		// 4. 切到 water_bucket → 朝岩浆看 → 真实发包交互倒水
@@ -99,6 +99,8 @@ public final class FormObsidianTrigger implements AchievementTrigger {
 		BlockHitResult hit = new BlockHitResult(targetCenter, Direction.UP, lavaPos, false);
 		PacketHelper.interactBlock(player, Hand.MAIN_HAND, hit);
 		PacketHelper.swingHand(player, Hand.MAIN_HAND);
+		// V5.50: 已发完整水桶浇岩浆动作链 → Registry 据此调 broadcastVanillaGrant
+		return true;
 	}
 
 	/**

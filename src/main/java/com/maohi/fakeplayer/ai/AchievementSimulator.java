@@ -196,6 +196,12 @@ public final class AchievementSimulator {
 	/**
 	 * P23: 共用 direct_grant 单点入口(Set.add + log + metrics + markDirty)。
 	 * 返回 1 表示首次解锁(供 syncFromVanilla 累计 newlyObserved),0 表示重复跳过。
+	 *
+	 * V5.50: 在自己 Set.add 之后,额外触发 vanilla advancement grant,
+	 *   让 server 自动广播 "<player> has made the advancement [<title>]" —— 拟真初衷的核心。
+	 *   旧版本因 P23 时期"vanilla criterion 对 fake player 不可靠"而绕开,但那是在
+	 *   player.networkHandler 还未完成 PLAY state 的早期。spawn 完成后,
+	 *   getAdvancementTracker().grantCriterion 应能正常工作并触发 PlayerManager.broadcast。
 	 */
 	private static int grantOne(ServerPlayerEntity p, Personality personality, String advId, String trigger) {
 		if (!personality.unlockedAdvancements.add(advId)) return 0;
@@ -205,7 +211,54 @@ public final class AchievementSimulator {
 		com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(p.getUuid());
 		com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
 		if (mgr != null) mgr.markStorageDirty();
+
+		// V5.50: 真触发 vanilla advancement,让 server 自动派发 chat 广播
+		broadcastVanillaGrant(p, advId);
+
 		return 1;
+	}
+
+	/**
+	 * V5.50: 把项目自己的"逻辑成就 ID"映射到 vanilla AdvancementEntry,
+	 *   调用 grantCriterion 触发 vanilla 内部的 endorse() → PlayerManager.broadcast 广播链路。
+	 *
+	 *   公开入口供 grantOne / CraftingBehavior / SmeltingBehavior / VPM directGrant 等所有
+	 *   解锁路径在 add Set 之后调用一次,确保所有成就解锁都伴随 vanilla 广播。
+	 *
+	 * 设计要点:
+	 *   1. ID 归一化:剥掉可能的 namespace 前缀,统一走 minecraft:&lt;path&gt;
+	 *   2. loader 找不到 entry 静默返回(向后兼容自定义 advancement / 跨版本 rename)
+	 *   3. 给 advancement 的**所有** criterion 打钩 —— grantCriterion 内部检查完成度,
+	 *      全 done 时 fire endorse() → 广播;若已 done 则是 no-op
+	 *   4. 任何异常吞掉只 log,绝不影响 personality.unlockedAdvancements 已 add 的状态
+	 *
+	 * announceAdvancements gamerule:
+	 *   服主若把这个 gamerule 设为 false,vanilla 内部 broadcast 会被抑制 —— 这是 vanilla 行为,
+	 *   不在本方法控制范围。默认值 true,大多数服都广播。
+	 */
+	public static void broadcastVanillaGrant(ServerPlayerEntity p, String advId) {
+		try {
+			MinecraftServer server = p.getEntityWorld().getServer();
+			if (server == null) return;
+			// 归一化 ID:剥掉可能的 "minecraft:" 前缀,统一用 minecraft 命名空间。
+			//   不接 mod 自定义 advancement —— 项目里 stat-driven 路径 ID 全是 vanilla 路径。
+			String path = advId.contains(":") ? advId.substring(advId.indexOf(':') + 1) : advId;
+			Identifier id = Identifier.of("minecraft", path);
+			AdvancementEntry entry = server.getAdvancementLoader().get(id);
+			if (entry == null) {
+				com.maohi.fakeplayer.TaskLogger.log(p, "vanilla_grant_skip",
+					"id", advId, "reason", "loader_no_entry");
+				return;
+			}
+			// 给所有 criterion 打钩:grantCriterion 内部会检测全 done,fire endorse() 广播;
+			//   若某 criterion 已 done,grantCriterion 早返 false,无副作用。
+			for (String criterion : entry.value().criteria().keySet()) {
+				p.getAdvancementTracker().grantCriterion(entry, criterion);
+			}
+		} catch (Throwable t) {
+			com.maohi.fakeplayer.TaskLogger.log(p, "vanilla_grant_fail",
+				"id", advId, "err", t.getClass().getSimpleName() + ":" + t.getMessage());
+		}
 	}
 
 	/**
@@ -318,9 +371,13 @@ public final class AchievementSimulator {
 				sample.add(e.id().toString());
 				if (++count >= 30) break;
 			}
-			org.slf4j.LoggerFactory.getLogger("Server thread").info(
-				"[MaohiTask] enumerate_loader_dump loaderClass={} path={} err={} size={} sample={}",
-				loaderClassName, diagPath, diagErr, result.size(), sample);
+			// V5.49: 改走 TaskLogger,受 debugVirtualTasks 开关控制
+			com.maohi.fakeplayer.TaskLogger.logRaw("SYSTEM", "enumerate_loader_dump",
+				"loaderClass", loaderClassName,
+				"path", diagPath,
+				"err", diagErr,
+				"size", result.size(),
+				"sample", sample);
 		}
 
 		return result;

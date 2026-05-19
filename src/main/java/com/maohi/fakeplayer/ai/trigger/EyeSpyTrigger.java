@@ -35,12 +35,12 @@ public final class EyeSpyTrigger implements AchievementTrigger {
 	}
 
 	@Override
-	public void tryTrigger(ServerPlayerEntity player, Personality personality) {
+	public boolean tryTrigger(ServerPlayerEntity player, Personality personality) {
 		// 节流由 Registry 负责
 
 		PlayerInventory inv = player.getInventory();
 		int eyeSlot = TriggerUtil.findItemSlot(inv, Items.ENDER_EYE);
-		if (eyeSlot == -1) return;
+		if (eyeSlot == -1) return false;
 
 		if (eyeSlot >= 9) {
 			TriggerUtil.swapToHotbar(player, eyeSlot, 0);
@@ -52,5 +52,7 @@ public final class EyeSpyTrigger implements AchievementTrigger {
 		player.setPitch(Math.max(-30f, player.getPitch() - 20f));
 
 		PacketHelper.useItem(player, Hand.MAIN_HAND);
+		// V5.50: 已发末影之眼 use 包 → Registry 据此调 broadcastVanillaGrant
+		return true;
 	}
 }

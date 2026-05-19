@@ -104,7 +104,12 @@ public final class TriggerRegistry {
 
 			if (!t.shouldRun(player, personality)) continue;
 			try {
-				t.tryTrigger(player, personality);
+				// V5.50: tryTrigger 返回 true = bot 完整执行了动作链 → 调 broadcastVanillaGrant
+				//   触发 vanilla 自动广播 "<player> has made the advancement [<title>]"。
+				//   返回 false(前置不满足/没物品/赶路中)不 grant 不广播,语义清晰。
+				if (t.tryTrigger(player, personality)) {
+					com.maohi.fakeplayer.ai.AchievementSimulator.broadcastVanillaGrant(player, t.advancementId());
+				}
 			} catch (Throwable ignored) {
 				// 安静失败,保持 AI 线程稳定
 			}
