@@ -1591,6 +1591,8 @@ prepareAndSpawnVirtualPlayer();
         com.maohi.fakeplayer.ai.EatingBehavior.handleSurvival(p, personality);
         // V5.22: 拉弓状态机检查——保证 useItem(bow) 之后一定 release,反作弊不 flag
         com.maohi.fakeplayer.ai.EatingBehavior.tickBowRelease(p, personality);
+        // V5.53: 弩三段射击状态机第二段——charge 释放后自动 shoot,让 vanilla shot_crossbow 真 fire
+        com.maohi.fakeplayer.ai.EatingBehavior.tickCrossbowAutoShoot(p, personality);
         com.maohi.fakeplayer.ai.EquipmentBehavior.autoEquipArmor(p);
         GrowthPhase phase = detectPhase(p);
         // V5.30 W2S 收尾:STONE_AGE + IRON_AGE 都跑 autoCraftStoneTools。

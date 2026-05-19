@@ -430,8 +430,27 @@ public class MaohiCommands {
         }
 
         // ---- 成就数 ----
-        int advCount = pers != null && pers.unlockedAdvancements != null
-            ? pers.unlockedAdvancements.size() : 0;
+        // V5.50.1: 按真人对齐 — 只计入 vanilla loader 真实认识的 advancement,
+        //   过滤项目历史用作内部里程碑的非 vanilla ID(如 story/obtain_coal / story/mine_redstone
+        //   / story/iron_source 等),让 list 显示的成就数 = vanilla 真人会广播的那批。
+        //   说明:vanilla advancement 含 root 类(announce_to_chat=false 不广播),仍算在内 ——
+        //   真人 advancement tab 也是会显示 root 已解锁的,只是没 chat 广播,语义一致。
+        int advCount = 0;
+        if (pers != null && pers.unlockedAdvancements != null && !pers.unlockedAdvancements.isEmpty()) {
+            net.minecraft.server.MinecraftServer server = manager.getServer();
+            if (server != null) {
+                for (String advId : pers.unlockedAdvancements) {
+                    String path = advId.contains(":") ? advId.substring(advId.indexOf(':') + 1) : advId;
+                    try {
+                        if (server.getAdvancementLoader().get(net.minecraft.util.Identifier.of("minecraft", path)) != null) {
+                            advCount++;
+                        }
+                    } catch (Throwable ignored) {
+                        // 解析失败的 advId 不计入,保持显示与广播状态一致
+                    }
+                }
+            }
+        }
 
         // ---- 背包资源统计 + 镐/剑/弓 等级（中文等级，0=无 1=木 2=石 3=铁 4=钻 5=合金） ----
         // V5.48: 扩大资源扫描清单 + 装甲/武备显式化。

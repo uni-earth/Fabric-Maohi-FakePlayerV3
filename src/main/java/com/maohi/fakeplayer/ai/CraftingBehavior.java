@@ -523,8 +523,10 @@ public final class CraftingBehavior {
 		if (target == Items.WOODEN_PICKAXE || target == Items.STONE_PICKAXE
 			|| target == Items.STONE_SWORD || target == Items.STONE_AXE) {
 			advId = "story/upgrade_tools";
-		} else if (target == Items.IRON_PICKAXE || target == Items.IRON_SWORD
-			|| target == Items.IRON_AXE) {
+		} else if (target == Items.IRON_PICKAXE) {
+			// V5.52: vanilla 真实主线 "Isn't It Iron Pick" — 只 IRON_PICKAXE 触发(不含 axe/sword)
+			advId = "story/iron_tools";
+		} else if (target == Items.IRON_SWORD || target == Items.IRON_AXE) {
 			advId = "story/acquire_iron";
 		} else if (target == Items.DIAMOND_PICKAXE || target == Items.DIAMOND_SWORD) {
 			// vanilla: story/mine_diamond（获取钻石）,这里用它标记钻石级合成里程碑

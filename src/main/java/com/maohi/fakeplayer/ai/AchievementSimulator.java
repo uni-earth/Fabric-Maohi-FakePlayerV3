@@ -87,6 +87,17 @@ public final class AchievementSimulator {
 				newlyObserved++;
 				com.maohi.fakeplayer.TaskLogger.log(p, "achievement_unlocked", "id", advId);
 				com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(p.getUuid());
+
+				// V5.50.1: vanilla 自身 fire 路径下,理论上 fire 时已经触发 endorse → broadcast,
+				//   但实测某些场景下 fake player 路径上的 fire 链路被吞(criteria trigger 调用
+				//   不一致),advancement done 但聊天没广播。补一次 broadcastVanillaGrant:
+				//     - vanilla 已 fire 且广播完成 → grantCriterion 内部 alreadyDone=true,
+				//       endorse 不再 fire,无副作用
+				//     - vanilla fire 但广播被吞 → grantCriterion 仍是 no-op(advancement 已 done),
+				//       但...实际上这种情况 endorse 永远不会再 fire,本路径补救无效
+				//   实际意义:对项目"isDone() 但 endorse 没跑"的边界场景兜底,纯保险写法,
+				//   主战场仍是 grantOne / directGrant 路径上的 broadcastVanillaGrant 调用。
+				broadcastVanillaGrant(p, advId);
 			}
 		}
 
@@ -225,21 +236,30 @@ public final class AchievementSimulator {
 	 *   公开入口供 grantOne / CraftingBehavior / SmeltingBehavior / VPM directGrant 等所有
 	 *   解锁路径在 add Set 之后调用一次,确保所有成就解锁都伴随 vanilla 广播。
 	 *
+	 * V5.50.1: 返回值改为 boolean,区分 vanilla 真实认识的 advancement vs 项目自定义里程碑。
+	 *   - true  = vanilla loader 找到 entry,已调 grantCriterion 触发广播
+	 *   - false = vanilla loader 找不到(项目自定义 ID 如 story/obtain_coal),静默跳过
+	 *   调用方据此决定是否记入 personality.unlockedAdvancements:
+	 *     真实 vanilla advancement → 记 Set + log + metrics(/maohi list 计数与真人一致)
+	 *     项目自定义里程碑       → 仍可单独记 metrics 但不污染 Set 计数
+	 *
 	 * 设计要点:
 	 *   1. ID 归一化:剥掉可能的 namespace 前缀,统一走 minecraft:&lt;path&gt;
-	 *   2. loader 找不到 entry 静默返回(向后兼容自定义 advancement / 跨版本 rename)
+	 *   2. loader 找不到 entry 静默返回 false(向后兼容自定义 advancement / 跨版本 rename)
 	 *   3. 给 advancement 的**所有** criterion 打钩 —— grantCriterion 内部检查完成度,
 	 *      全 done 时 fire endorse() → 广播;若已 done 则是 no-op
-	 *   4. 任何异常吞掉只 log,绝不影响 personality.unlockedAdvancements 已 add 的状态
+	 *   4. 任何异常吞掉只 log,绝不影响调用方逻辑
 	 *
 	 * announceAdvancements gamerule:
 	 *   服主若把这个 gamerule 设为 false,vanilla 内部 broadcast 会被抑制 —— 这是 vanilla 行为,
 	 *   不在本方法控制范围。默认值 true,大多数服都广播。
+	 *
+	 * @return true 如果 advId 是 vanilla 真实 advancement 且 grant 成功;false 否则
 	 */
-	public static void broadcastVanillaGrant(ServerPlayerEntity p, String advId) {
+	public static boolean broadcastVanillaGrant(ServerPlayerEntity p, String advId) {
 		try {
 			MinecraftServer server = p.getEntityWorld().getServer();
-			if (server == null) return;
+			if (server == null) return false;
 			// 归一化 ID:剥掉可能的 "minecraft:" 前缀,统一用 minecraft 命名空间。
 			//   不接 mod 自定义 advancement —— 项目里 stat-driven 路径 ID 全是 vanilla 路径。
 			String path = advId.contains(":") ? advId.substring(advId.indexOf(':') + 1) : advId;
@@ -248,16 +268,18 @@ public final class AchievementSimulator {
 			if (entry == null) {
 				com.maohi.fakeplayer.TaskLogger.log(p, "vanilla_grant_skip",
 					"id", advId, "reason", "loader_no_entry");
-				return;
+				return false;
 			}
 			// 给所有 criterion 打钩:grantCriterion 内部会检测全 done,fire endorse() 广播;
 			//   若某 criterion 已 done,grantCriterion 早返 false,无副作用。
 			for (String criterion : entry.value().criteria().keySet()) {
 				p.getAdvancementTracker().grantCriterion(entry, criterion);
 			}
+			return true;
 		} catch (Throwable t) {
 			com.maohi.fakeplayer.TaskLogger.log(p, "vanilla_grant_fail",
 				"id", advId, "err", t.getClass().getSimpleName() + ":" + t.getMessage());
+			return false;
 		}
 	}
 

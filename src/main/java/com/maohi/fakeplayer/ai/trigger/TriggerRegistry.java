@@ -14,14 +14,32 @@ import java.util.concurrent.ThreadLocalRandom;
  * ┌──────────────────────────────────────────────────────────────────┐
  * │ 阶段 × Trigger 映射表                                              │
  * │                                                                    │
- * │ WOOD_AGE    │ PlantSeed, SleepInBed, KillMob   (与 STONE_AGE 同桶) │
- * │ STONE_AGE   │ PlantSeed, SleepInBed, KillMob                       │
- * │ IRON_AGE    │ PlantSeed, SleepInBed, KillMob,                      │
- * │             │ HotStuff, BreedAnimals, AdventuringTime              │
- * │ DIAMOND_AGE │ BreedAnimals, AdventuringTime, FormObsidian[占位]    │
- * │ NETHER      │ AdventuringTime, EyeSpy, BlazeRod[占位]              │
- * │ ENDGAME     │ AdventuringTime, EnchantItem[占位]                   │
+ * │ WOOD_AGE    │ PlantSeed, SleepInBed, KillMob, TameAnimal           │
+ * │ STONE_AGE   │ PlantSeed, SleepInBed, KillMob, TameAnimal           │
+ * │ IRON_AGE    │ PlantSeed, SleepInBed, KillMob, TameAnimal,          │
+ * │             │ HotStuff, BreedAnimals(6 种), AdventuringTime,        │
+ * │             │ ShootArrow, OlBetsy, SniperDuel, DeflectArrow        │
+ * │ DIAMOND_AGE │ BreedAnimals, AdventuringTime, FormObsidian[占位],   │
+ * │             │ TameAnimal, ShootArrow, OlBetsy, SniperDuel,         │
+ * │             │ DeflectArrow                                          │
+ * │ NETHER      │ AdventuringTime, EyeSpy, BlazeRod[占位],             │
+ * │             │ ShootArrow, DistractPiglin, OlBetsy, DeflectArrow,   │
+ * │             │ CureZombieVillager                                    │
+ * │ ENDGAME     │ AdventuringTime, EnchantItem[占位],                  │
+ * │             │ ShootArrow, DistractPiglin, OlBetsy, DeflectArrow,   │
+ * │             │ CureZombieVillager                                    │
  * └──────────────────────────────────────────────────────────────────┘
+ *
+ * V5.51-V5.52 扩展:
+ *   - ShootArrow      (adventure/shoot_arrow)        — 弓射弱怪
+ *   - DistractPiglin  (nether/distract_piglin)       — 下界给猪灵金锭
+ *   - TameAnimal      (husbandry/tame_an_animal)     — 骨头驯狼 / 鱼驯猫
+ *   - OlBetsy         (adventure/ol_betsy)           — 弩 charge,复用 isUsingBow 状态机
+ *   - SniperDuel      (adventure/sniper_duel)        — 50+ 格弓杀骷髅
+ *   - DeflectArrow    (story/deflect_arrow)          — 持盾 + 附近骷髅时举盾(V5.52)
+ *   - CureZombieVillager (story/cure_zombie_villager) — 投药+喂金苹果动作链(V5.52,跨阶段假设)
+ *   - BreedAnimals 扩展从 3 种(cow/chicken/pig)→ 6 种(+sheep/goat/mooshroom)
+ *   每个 trigger 自带 shouldRun 兜底(已解锁/资源不足时直接 false),不占运行成本。
  *
  * 错峰机制(解决"真人也不会同时做同一件事"):
  *   1. 每个假人在 Personality 里有独立 triggerPhaseSeed(ThreadLocalRandom 生成)
@@ -45,10 +63,12 @@ public final class TriggerRegistry {
 
 	// ===== 阶段分桶:每个 GrowthPhase 只 tick 自己桶里的 trigger =====
 	// V5.44: WOOD_AGE 与 STONE_AGE 共享同一份早期 trigger 列表(指向同一 List 实例,无额外内存)
+	// V5.51: TameAnimal 也算早期可触发 — 骨头/鱼从骷髅/钓鱼掉,不需高阶资源
 	private static final List<AchievementTrigger> EARLY_GAME_TRIGGERS = List.of(
 		PlantSeedTrigger.INSTANCE,
 		SleepInBedTrigger.INSTANCE,
-		KillMobTrigger.INSTANCE
+		KillMobTrigger.INSTANCE,
+		TameAnimalTrigger.INSTANCE
 	);
 
 	private static final Map<GrowthPhase, List<AchievementTrigger>> PHASE_BUCKETS = Map.of(
@@ -60,21 +80,41 @@ public final class TriggerRegistry {
 			KillMobTrigger.INSTANCE,
 			HotStuffTrigger.INSTANCE,
 			BreedAnimalsTrigger.INSTANCE,
-			AdventuringTimeTrigger.INSTANCE
+			AdventuringTimeTrigger.INSTANCE,
+			TameAnimalTrigger.INSTANCE,
+			ShootArrowTrigger.INSTANCE,
+			OlBetsyTrigger.INSTANCE,
+			SniperDuelTrigger.INSTANCE,
+			DeflectArrowTrigger.INSTANCE
 		),
 		GrowthPhase.DIAMOND_AGE, List.of(
 			BreedAnimalsTrigger.INSTANCE,
 			AdventuringTimeTrigger.INSTANCE,
-			FormObsidianTrigger.INSTANCE
+			FormObsidianTrigger.INSTANCE,
+			TameAnimalTrigger.INSTANCE,
+			ShootArrowTrigger.INSTANCE,
+			OlBetsyTrigger.INSTANCE,
+			SniperDuelTrigger.INSTANCE,
+			DeflectArrowTrigger.INSTANCE
 		),
 		GrowthPhase.NETHER, List.of(
 			AdventuringTimeTrigger.INSTANCE,
 			EyeSpyTrigger.INSTANCE,
-			BlazeRodTrigger.INSTANCE
+			BlazeRodTrigger.INSTANCE,
+			ShootArrowTrigger.INSTANCE,
+			DistractPiglinTrigger.INSTANCE,
+			OlBetsyTrigger.INSTANCE,
+			DeflectArrowTrigger.INSTANCE,
+			CureZombieVillagerTrigger.INSTANCE
 		),
 		GrowthPhase.ENDGAME, List.of(
 			AdventuringTimeTrigger.INSTANCE,
-			EnchantItemTrigger.INSTANCE
+			EnchantItemTrigger.INSTANCE,
+			ShootArrowTrigger.INSTANCE,
+			DistractPiglinTrigger.INSTANCE,
+			OlBetsyTrigger.INSTANCE,
+			DeflectArrowTrigger.INSTANCE,
+			CureZombieVillagerTrigger.INSTANCE
 		)
 	);
 

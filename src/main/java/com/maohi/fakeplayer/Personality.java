@@ -286,6 +286,15 @@ public class Personality {
 	public boolean isUsingBow = false;
 	public long bowReleaseTick = 0L;
 
+	// V5.53 弩三段射击状态机:
+	//   完整 vanilla 流程 — useItem(charge) → 25 tick → release(setCharged true) → useItem(shoot)
+	//   tickBowRelease 处理"释放"环节(走 isUsingBow 路径,t=0 设 release tick);
+	//   本字段调度"释放后 +2 tick 再次 useItem 完成 shoot",让 vanilla shot_crossbow criterion 真 fire。
+	//   OlBetsyTrigger 在 charge 时设置 crossbowAutoShootAtTick = now + 27(release 后 2 tick);
+	//   VPM.tickSurvivalAndProgression 调 tickCrossbowAutoShoot 检查,到时自动 shoot。
+	//   transient:仅本会话,不持久化(下线时 charge 状态已失效)。
+	public transient long crossbowAutoShootAtTick = 0L;
+
 	// V5.23 火把放置状态机(原版客户端切槽→交互→切回需要数 tick):
 	//   stage 0 = idle/未启动
 	//   stage 1 = 已切到火把槽,等待 placeAtTick 到时执行 interactBlock

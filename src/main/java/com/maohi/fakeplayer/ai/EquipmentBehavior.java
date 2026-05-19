@@ -118,10 +118,44 @@ public final class EquipmentBehavior {
 						PacketHelper.setSelectedSlot(player, i);
 					}
 					PacketHelper.useItem(player, net.minecraft.util.Hand.MAIN_HAND);
-					return; // 一次只穿一件, 防止发包洪泛
+					// 一次只穿一件,防止发包洪泛;穿完顺手 check shiny_gear(穿钻装最后一件时触发)
+					checkShinyGearAchievement(player);
+					return;
 				}
 			}
 		}
+		// 没新装备可换:也 check 一次 — 防止 bot 上次穿完没 check(autoEquipArmor 100 tick 1 次,
+		//   万一在穿完的同 tick return,下一轮如果没新装备进入 for 循环里的 check 不会跑)
+		checkShinyGearAchievement(player);
+	}
+
+	/**
+	 * V5.52: 全套钻石装备检查 → 主动 broadcast story/shiny_gear (vanilla 真实主线 "Cover Me With Diamonds")。
+	 *
+	 * vanilla criterion: inventory_changed,要求 player 同时装备 4 件钻石护甲。
+	 *   vanilla 自然 fire 路径在 fake player 上不可靠(同 V5.50.1 已发现),这里主动检查 + broadcast。
+	 *   首次满足条件即记 Set,后续重复 check 走 contains 短路,无额外成本。
+	 */
+	private static void checkShinyGearAchievement(ServerPlayerEntity player) {
+		com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(player);
+		if (pers == null) return;
+		if (pers.unlockedAdvancements.contains("story/shiny_gear")) return;
+
+		// 4 槽必须分别是钻头盔/胸甲/腿甲/靴子
+		if (player.getEquippedStack(net.minecraft.entity.EquipmentSlot.HEAD).getItem() != Items.DIAMOND_HELMET) return;
+		if (player.getEquippedStack(net.minecraft.entity.EquipmentSlot.CHEST).getItem() != Items.DIAMOND_CHESTPLATE) return;
+		if (player.getEquippedStack(net.minecraft.entity.EquipmentSlot.LEGS).getItem() != Items.DIAMOND_LEGGINGS) return;
+		if (player.getEquippedStack(net.minecraft.entity.EquipmentSlot.FEET).getItem() != Items.DIAMOND_BOOTS) return;
+
+		pers.unlockedAdvancements.add("story/shiny_gear");
+		pers.hasUnlockedThisSession = true;
+		com.maohi.fakeplayer.TaskLogger.log(player, "achievement_unlocked",
+			"id", "story/shiny_gear", "via", "equipment_check");
+		com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(player.getUuid());
+		com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
+		if (mgr != null) mgr.markStorageDirty();
+
+		com.maohi.fakeplayer.ai.AchievementSimulator.broadcastVanillaGrant(player, "story/shiny_gear");
 	}
 
 	private static int getArmorDefense(ItemStack stack) {
