@@ -120,6 +120,35 @@ public final class EatingBehavior {
 		}
 	}
 
+	/**
+	 * V5.53: 弩三段射击状态机第二段 — release(setCharged) 后再次 useItem 触发真 shoot。
+	 *   背景:vanilla CrossbowItem 必须按两次右键(charge → shoot)才完整射出投射物,
+	 *   shot_crossbow criterion 在 shoot 那一刻 fire。OlBetsyTrigger 入口只做第一次 useItem
+	 *   开始 charge,本方法在 charge 完成后 2 tick 触发第二次 useItem 让 vanilla 真射出箭,
+	 *   把 ol_betsy 从"B 类强行打钩"升级到"A 类 vanilla 自然 fire"。
+	 *
+	 *   时序保证:OlBetsyTrigger 设 bowReleaseTick = now+25, crossbowAutoShootAtTick = now+27,
+	 *   tickBowRelease 在 t=25 调 releaseUseItem(完成 charge),本方法 t=27 调 useItem(shoot)。
+	 *   2 tick 缓冲让 vanilla 内部 setCharged 状态稳定。
+	 *
+	 *   防呆:hotbar 0 必须仍是 CROSSBOW(bot 中途切槽就放弃),否则误射其它物品。
+	 */
+	public static void tickCrossbowAutoShoot(ServerPlayerEntity player, Personality personality) {
+		if (personality == null || personality.crossbowAutoShootAtTick <= 0L) return;
+		long now = player.getEntityWorld().getServer().getTicks();
+		if (now < personality.crossbowAutoShootAtTick) return;
+		// 防呆:hotbar 0 必须仍是弩
+		if (!player.getInventory().getStack(player.getInventory().getSelectedSlot())
+				.isOf(net.minecraft.item.Items.CROSSBOW)) {
+			personality.crossbowAutoShootAtTick = 0L;
+			return;
+		}
+		// vanilla CrossbowItem.use:弩已 charged → shootAll → 射出箭 + setCharged(false)
+		//   shot_crossbow criterion 在 shootAll 内部 fire → ol_betsy 自然 broadcast
+		com.maohi.fakeplayer.network.PacketHelper.useItem(player, Hand.MAIN_HAND);
+		personality.crossbowAutoShootAtTick = 0L;
+	}
+
 	/** V5.22: 搜整个背包找食物;调用方负责把找到的槽位换到快捷栏。 */
 	private static int findFoodSlot(PlayerInventory inv) {
 		for (int i = 0; i < inv.size(); i++) {
