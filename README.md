@@ -76,6 +76,7 @@ Fabric 配置：依赖 Fabric-API 0.136.0 与 Loader 0.19.2 及以上。
 | `/maohi spawn <name>` | 指定召唤(异步获取正版皮肤) |
 | `/maohi kick <name>` | 踢出指定假人(按真实 disconnect 流程下线) |
 | `/maohi reload` | 热重载业务配置 |
+| `/maohi debug`  | debug模式零时切换 |
 | `/maohi metrics` | 性能看板:Tick 平均耗时 + 生成/复活成功失败统计 |
 
 ### 🌳 模块化架构树状图 (Architecture Tree)

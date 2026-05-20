@@ -235,7 +235,7 @@ public class Personality {
 
 	// V5.1 合成模拟数据
 	public int craftingTicks = 0;
-	public net.minecraft.item.Item craftingTarget = null;
+	public transient net.minecraft.item.Item craftingTarget = null;
 	// V5.2 协议层拟真：反指纹系统
 	public float lastTargetYaw = 0, lastTargetPitch = 0;
 	public long rotationStartTime = 0;
