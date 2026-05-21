@@ -142,6 +142,7 @@ public class PlayerSpawner {
 			"radius", spawnRadius,
 			"final", "(" + finalPos.getX() + "," + finalPos.getY() + "," + finalPos.getZ() + ")",
 			"playerPos", "(" + player.getX() + "," + player.getY() + "," + player.getZ() + ")");
+	}
 	if (saved != null) {
 		if (saved.personality == null) saved.personality = new com.maohi.fakeplayer.Personality();
 		tryDetectColdChunk(overworld, uuid, saved.personality, name, manager);
