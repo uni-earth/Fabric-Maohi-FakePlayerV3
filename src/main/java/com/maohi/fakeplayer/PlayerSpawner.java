@@ -142,6 +142,9 @@ public class PlayerSpawner {
 			"radius", spawnRadius,
 			"final", "(" + finalPos.getX() + "," + finalPos.getY() + "," + finalPos.getZ() + ")",
 			"playerPos", "(" + player.getX() + "," + player.getY() + "," + player.getZ() + ")");
+	if (saved != null) {
+		if (saved.personality == null) saved.personality = new com.maohi.fakeplayer.Personality();
+		tryDetectColdChunk(overworld, uuid, saved.personality, name, manager);
 	}
 
 	ClientConnection conn = new FakeClientConnection();
@@ -508,5 +511,117 @@ public class PlayerSpawner {
                 t.toString());
             return def;
         }
+    }
+
+    /** V5.56 Phase 3 / V5.57 加固:读 playerdata/&lt;uuid&gt;.dat 中的 Pos 字段，检测 chunk 是否已加载。
+     *  如果是冷区块，把原位置记录到 Personality，并临时将 .dat 中的位置重写为 worldSpawn，
+     *  同时对目标 chunk 开启 setChunkForced 异步强载，以实现无阻塞登录 + 延迟传送。
+     *
+     *  V5.57 加固项(防数据损坏):
+     *   1) Dimension guard:非 overworld(Nether/End) saved bot 直接 return,避免维度错配把
+     *      Nether bot 强制送到 overworld spawnPos 坐标(可能卡岩石/虚空)。
+     *   2) .dat 备份/还原:改写前先 copy &lt;uuid&gt;.dat → &lt;uuid&gt;.dat.bak,
+     *      teleport 成功后 lambda 内删 .bak;启动时 VPM.restorePlayerDataBackups
+     *      扫描所有 .bak 还原,保证进程崩溃不丢真实下线位置。
+     *   3) Motion/FallDistance/RootVehicle 清理:避免 bot spawn 在 worldSpawn 带着原下线方向
+     *      的惯性/骑乘状态,出现瞬移或骑空气马等异常。
+     *   4) setChunkForced 入 VPM.forcedSpawnChunks 集合,/maohi off + stop() 时由
+     *      releaseForcedSpawnChunks 兜底释放,防止 bot 异常下线时 chunk 永久 forced。
+     */
+    private static net.minecraft.util.math.BlockPos tryDetectColdChunk(
+            net.minecraft.server.world.ServerWorld world, UUID uuid,
+            Personality personality, String name, VirtualPlayerManager manager) {
+        java.io.File playerFile = null;
+        java.io.File bakFile = null;
+        try {
+            playerFile = new java.io.File(world.getServer().getSavePath(
+                net.minecraft.util.WorldSavePath.PLAYERDATA).toFile(), uuid + ".dat");
+            if (!playerFile.exists()) return null;
+            // 读 NBT
+            net.minecraft.nbt.NbtCompound nbt = net.minecraft.nbt.NbtIo.readCompressed(
+                playerFile.toPath(), net.minecraft.nbt.NbtSizeTracker.ofUnlimitedBytes());
+
+            // V5.57 (1) Dimension guard:Nether/End saved bot 走 vanilla 原生路径,避免维度错配。
+            //   vanilla 1.21.x 的 PlayerEntity.Dimension 字段是 "minecraft:overworld" /
+            //   "minecraft:the_nether" / "minecraft:the_end" 字符串。缺字段(老存档)按 overworld 处理。
+            if (nbt.contains("Dimension")) {
+                String dim = nbt.getString("Dimension");
+                if (dim != null && !dim.isEmpty() && !"minecraft:overworld".equals(dim)) {
+                    return null;
+                }
+            }
+
+            if (!nbt.contains("Pos")) return null;
+            net.minecraft.nbt.NbtList posList = nbt.getList("Pos", 6); // 6=Double
+            double bx = posList.getDouble(0);
+            double by = posList.getDouble(1);
+            double bz = posList.getDouble(2);
+            int cx = ((int) bx) >> 4;
+            int cz = ((int) bz) >> 4;
+            if (world.isChunkLoaded(cx, cz)) return null; // 已加载，无需干预
+
+            // 记录真实下线位置，并标记到 personality
+            net.minecraft.util.math.BlockPos targetPos = new net.minecraft.util.math.BlockPos((int) bx, (int) by, (int) bz);
+            personality.pendingTeleportPos = targetPos;
+            personality.pendingTeleportAt = System.currentTimeMillis();
+
+            // V5.57 (2) 备份原 .dat 到 .dat.bak,teleport 成功后由 VPM 主线程 lambda 删除;
+            //   进程崩溃 / chunk 永远不加载 → 启动时 VPM.restorePlayerDataBackups 还原。
+            bakFile = new java.io.File(playerFile.getParentFile(), uuid + ".dat.bak");
+            java.nio.file.Files.copy(playerFile.toPath(), bakFile.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+
+            // 临时重写 Pos 字段为 worldSpawn 坐标，避开 loadPlayerData 的同步加载
+            net.minecraft.util.math.BlockPos spawnPos = world.getSpawnPos();
+            nbt.put("Pos", net.minecraft.nbt.NbtList.of(
+                net.minecraft.nbt.NbtDouble.of(spawnPos.getX() + 0.5),
+                net.minecraft.nbt.NbtDouble.of(spawnPos.getY()),
+                net.minecraft.nbt.NbtDouble.of(spawnPos.getZ() + 0.5)
+            ));
+            // V5.57 (3) 清理 Motion / Fall / Riding,防止 bot spawn 在 worldSpawn 带原下线惯性/骑乘。
+            //   Motion 缺省 vanilla 当 (0,0,0) 处理;FallDistance 缺省当 0;RootVehicle 缺省当无骑乘。
+            nbt.remove("Motion");
+            nbt.remove("FallDistance");
+            nbt.remove("RootVehicle");
+
+            // 写回 .dat 文件
+            net.minecraft.nbt.NbtIo.writeCompressed(nbt, playerFile.toPath());
+
+            // 异步加载目标冷区块 + V5.57 (4) 记账给 VPM,/maohi off / stop 兜底释放
+            world.setChunkForced(cx, cz, true);
+            if (manager != null) {
+                manager.addForcedSpawnChunk(((long) cx << 32) | (cz & 0xFFFFFFFFL));
+            }
+
+            TaskLogger.logRaw(name, "cold_chunk_detected",
+                "original", "(" + (int)bx + "," + (int)by + "," + (int)bz + ")",
+                "spawn", "(" + spawnPos.getX() + "," + spawnPos.getY() + "," + spawnPos.getZ() + ")");
+
+            return targetPos;
+        } catch (Throwable t) {
+            // 任何失败 → 尽力还原 .bak(若已创建)+ 清 personality 标记 + 不阻塞 spawn
+            try {
+                if (bakFile != null && bakFile.exists() && playerFile != null) {
+                    java.nio.file.Files.copy(bakFile.toPath(), playerFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    bakFile.delete();
+                }
+            } catch (Throwable ignored) {}
+            personality.pendingTeleportPos = null;
+            personality.pendingTeleportAt = 0L;
+            org.slf4j.LoggerFactory.getLogger("Server thread")
+                .error("Failed to detect cold chunk for " + uuid, t);
+            return null;
+        }
+    }
+
+    /** V5.57: 由 VPM AI 线程 teleport lambda 调用,删除已 teleport 成功的 bot 的 .dat.bak。
+     *  失败静默(.bak 不存在 / 磁盘错误)— 启动时 restorePlayerDataBackups 会兜底再扫一次。 */
+    public static void deletePlayerDataBackup(net.minecraft.server.MinecraftServer server, UUID uuid) {
+        try {
+            java.io.File bak = new java.io.File(server.getSavePath(
+                net.minecraft.util.WorldSavePath.PLAYERDATA).toFile(), uuid + ".dat.bak");
+            if (bak.exists()) bak.delete();
+        } catch (Throwable ignored) {}
     }
 }

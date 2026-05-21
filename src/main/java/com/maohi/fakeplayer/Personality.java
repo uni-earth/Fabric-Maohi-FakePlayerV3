@@ -331,6 +331,13 @@ public class Personality {
 	public transient long lastMovementDiagAt = 0L;
 	// V5.55 P1b 诊断:30s/bot/reason 节流的 latch 原因 log,定位 moved30s=0 的真凶
 	public transient long lastMoveLatchLogAt = 0L;
+	// V5.56 Phase 3: 冷区块热点登录后需要延迟传送回下线位置。
+	//   volatile:AI 线程读 + 主线程 lambda 写 null,无锁可见性保证。
+	public transient volatile BlockPos pendingTeleportPos = null;
+	// V5.57: pendingTeleportPos 入队时间戳,AI 线程检测 60s 仍未 teleport → 兜底放弃。
+	//   背景:setChunkForced 异步加载失败 / chunk gen 卡死 → pendingTeleportPos 永远不清
+	//   → bot 永久卡 worldSpawn。timeout 后清字段 + 解除 forced,接受降级。
+	public transient volatile long pendingTeleportAt = 0L;
 	public transient double lastMovementSampleX = Double.NaN;
 	public transient double lastMovementSampleZ = Double.NaN;
 

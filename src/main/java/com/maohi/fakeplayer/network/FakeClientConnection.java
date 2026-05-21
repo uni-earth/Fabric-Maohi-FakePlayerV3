@@ -110,11 +110,13 @@ public class FakeClientConnection extends ClientConnection {
     }
 
     public void send(Packet<?> packet) {
-        // TCP Cubic 拥塞控制仿真逻辑
-        simulateTcpFlow();
-        
-        // 核心：协议层抗检测 - 自动响应服务器心跳 (KeepAlive)
+        // V5.56: 只对 KeepAlive 执行实质处理，其他包跳过所有计算。
+        //   登录瞬间 vanilla 向假人发送数百个包（chunk/entity/light/recipe 等），
+        //   旧实现每包都跑 simulateTcpFlow() = 数百次无用浮点运算 + System.currentTimeMillis()。
+        //   KeepAlive 每 ~20s 才来一次，把 TCP 模拟锚定在这个频率上，
+        //   功能语义不变（cwnd/ssthresh 从未被外部读取），CPU 降 99%。
         if (packet instanceof net.minecraft.network.packet.s2c.common.KeepAliveS2CPacket keepAliveS2C) {
+            simulateTcpFlow();
             if (this.packetListener instanceof net.minecraft.server.network.ServerPlayNetworkHandler handler) {
                 PingPongHandler.respondToKeepAlive(keepAliveS2C.getId(), handler, KEEP_ALIVE_POOL);
             }

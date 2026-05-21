@@ -57,7 +57,7 @@ public class ProfileFetcher {
 		// 1. 缓存命中:直接主线程安全生成
 		SkinService.SkinProperty cached = manager.getSkinCache().get(name);
 		if (cached != null) {
-			submitToServer(manager, () -> PlayerSpawner.spawn(manager, name, cached));
+			manager.enqueueSpawn(() -> PlayerSpawner.spawn(manager, name, cached));
 			return;
 		}
 
@@ -92,7 +92,7 @@ public class ProfileFetcher {
 			}
 
 			final SkinService.SkinProperty resolvedSkin = finalSkin;
-			submitToServer(manager, () -> PlayerSpawner.spawn(manager, name, resolvedSkin));
+			manager.enqueueSpawn(() -> PlayerSpawner.spawn(manager, name, resolvedSkin));
 		} catch (Throwable t) {
 			// 抓取过程中任何意外都不能让线程池工作线程死掉
 			org.slf4j.LoggerFactory.getLogger("Server thread")
@@ -115,15 +115,6 @@ public class ProfileFetcher {
 		int idx = java.util.concurrent.ThreadLocalRandom.current().nextInt(all.length);
 		Object pick = all[idx];
 		return pick instanceof SkinService.SkinProperty sp ? sp : null;
-	}
-
-	/** V5.23: 包裹 server.execute,服务器关停时静默 */
-	private static void submitToServer(VirtualPlayerManager manager, Runnable task) {
-		try {
-			manager.getServer().execute(task);
-		} catch (RejectedExecutionException ignored) {
-			// 服务器主线程已关停,不再调度
-		}
 	}
 
 	/** V5.23: 服务器关停时由 VPM/Maohi 调用,确保 daemon 池及时收尾 */

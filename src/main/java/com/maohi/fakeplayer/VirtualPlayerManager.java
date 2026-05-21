@@ -72,6 +72,12 @@ public class VirtualPlayerManager {
      *   long 编码:high32=cx, low32=cz(标准 ChunkPos 打包,允许负坐标)。
      */
     private final java.util.Set<Long> forcedSpawnChunks = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    // V5.56: 登录错峰队列——异步皮肤回调不再直接 server.execute(spawn)，
+    //   而是入队，由 manageLoop 每轮 logicTickCounter==20 时检查队列 + cooldown + MSPT 门控。
+    private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> pendingSpawnQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    // V5.56: 上次 onPlayerConnect 完成时间戳，配合 SPAWN_COOLDOWN_MS 保证两次 spawn 之间有喘息窗口
+    private volatile long lastSpawnCompletedAt = 0L;
+    private static final long SPAWN_COOLDOWN_MS = 10_000L;
     private volatile boolean running = false;
     private Thread managerThread;
 
@@ -99,6 +105,10 @@ public class VirtualPlayerManager {
         // planA B-4: 清空 BlockScanCache,确保新会话不被上次跑测的 30s TTL 残留坐标污染。
         //   重启 / 热加载 / 单服 /tps reset 等场景 instance 不一定重建,显式清一次保险。
         blockScanCache.clearAll();
+        // V5.57: 先还原所有 <uuid>.dat.bak,然后再 loadData。tryDetectColdChunk 改写过程被
+        //   异常中断时,.bak 保留了原始 .dat 内容,这里还原后 vanilla 任何路径读 .dat 拿到的就是
+        //   真实下线状态。必须在 loadData 之前,否则反序列化拿到的是改写后的 worldSpawn 坐标。
+        restorePlayerDataBackups();
         loadData();
 	// 工业级补丁：全库扫描并强制清理 V_ 开头的旧名字遗产
 	knownPlayers.values().forEach(sp -> {
@@ -429,6 +439,52 @@ public class VirtualPlayerManager {
 	if (p == null) continue;
 	Personality personality = playerPersonalities.get(uuid);
 	if (personality == null || personality.isEating) continue;
+
+	// V5.56 Phase 3: 冷区块传送检查——pendingTeleportPos 非空时，检测目标 chunk 是否已加载。
+	//   若已加载，则通过主线程将其传送至原下线位置，并解除 setChunkForced 强载。
+	// V5.57 加固:60s timeout 兜底 + 主线程 lambda 内删 .dat.bak。
+	if (personality.pendingTeleportPos != null) {
+		int cx = personality.pendingTeleportPos.getX() >> 4;
+		int cz = personality.pendingTeleportPos.getZ() >> 4;
+		net.minecraft.server.world.ServerWorld world = (net.minecraft.server.world.ServerWorld) p.getEntityWorld();
+		long ageMs = tickNow - personality.pendingTeleportAt;
+		// V5.57 timeout 兜底:setChunkForced 失败 / chunk gen 卡死 → 60s 内 chunk 仍未加载,
+		//   清字段 + 解除 forced + 删 .bak(.dat 里 Pos=worldSpawn,bot 接受降级留在 worldSpawn)。
+		if (ageMs > 60_000L) {
+			final UUID timeoutUuid = uuid;
+			final int tcx = cx; final int tcz = cz;
+			server.execute(() -> {
+				try { world.setChunkForced(tcx, tcz, false); } catch (Throwable ignored) {}
+				forcedSpawnChunks.remove(((long) tcx << 32) | (tcz & 0xFFFFFFFFL));
+				com.maohi.fakeplayer.PlayerSpawner.deletePlayerDataBackup(server, timeoutUuid);
+				com.maohi.fakeplayer.TaskLogger.log(p, "cold_chunk_timeout",
+					"chunkX", tcx, "chunkZ", tcz, "ageMs", ageMs);
+			});
+			personality.pendingTeleportPos = null;
+			personality.pendingTeleportAt = 0L;
+			continue;
+		}
+		if (world.isChunkLoaded(cx, cz)) {
+			BlockPos tp = personality.pendingTeleportPos;
+			final UUID teleportUuid = uuid;
+			server.execute(() -> {
+				if (!p.isAlive()) return;
+				p.refreshPositionAndAngles(tp.getX() + 0.5, tp.getY(), tp.getZ() + 0.5, p.getYaw(), p.getPitch());
+				personality.pendingTeleportPos = null;
+				personality.pendingTeleportAt = 0L;
+				personality.heightFloorY = tp.getY() - 10.0; // 重锚 floor
+				try { world.setChunkForced(cx, cz, false); } catch (Throwable ignored) {}
+				forcedSpawnChunks.remove(((long) cx << 32) | (cz & 0xFFFFFFFFL));
+				// V5.57: teleport 成功 → 删 .dat.bak。.dat 里 Pos 字段在下次 vanilla autosave 时
+				//   会被当前真实位置覆盖,但删 .bak 让启动还原路径不再误把过期备份覆盖回来。
+				com.maohi.fakeplayer.PlayerSpawner.deletePlayerDataBackup(server, teleportUuid);
+				com.maohi.fakeplayer.TaskLogger.log(p, "cold_chunk_teleport",
+					"to", "(" + tp.getX() + "," + tp.getY() + "," + tp.getZ() + ")");
+			});
+		}
+		continue; // 目标 chunk 未就绪时 bot 在 worldSpawn 不动
+	}
+
 	// V3.2 Lag Guard：解冻错峰检查——卡顿恢复后的假人不会同时"活过来"
 	if (tickNow < personality.lagFreezeUntil) continue;
 	// V3.2 Lag Guard：卡顿时随机跳过部分假人移动tick，模拟真人卡顿滑动（非整齐冻结）
@@ -601,6 +657,9 @@ prepareAndSpawnVirtualPlayer();
 			nextJoinTime = nowMs + (virtualPlayerUUIDs.isEmpty() ? 5000L : (30 + ThreadLocalRandom.current().nextInt(270)) * 1000L);
                         }
 
+                        // V5.56: 调度错峰登录队列，受 10s cooldown + MSPT 双重门控
+                        processPendingSpawns();
+
                         // 检查是否有计划下线的假人 (社交联动)
                         logoutScheduledTime.entrySet().removeIf(entry -> {
                             if (nowMs >= entry.getValue()) {
@@ -624,17 +683,25 @@ prepareAndSpawnVirtualPlayer();
                         //   触发,而 currentTargetCount 永远 ≥ configMin(updateTargetCount 已保证)。
                         for (UUID uuid : virtualPlayerUUIDs) {
                             if (nowMs > sessionDurations.getOrDefault(uuid, Long.MAX_VALUE)) {
-                                if (virtualPlayerUUIDs.size() <= config().minVirtualPlayers) {
+                                if (virtualPlayerUUIDs.size() - logoutScheduledTime.size() <= config().minVirtualPlayers) {
                                     long bufferMs = (5 + ThreadLocalRandom.current().nextInt(11)) * 60_000L;
                                     sessionDurations.merge(uuid, bufferMs, Long::sum);
-                                    break;
+                                    continue;
                                 }
                                 startLogoutProcess(uuid);
-                                break;
                             }
                         }
                         
-                        if (virtualPlayerUUIDs.size() > currentTargetCount) kickRandomVirtualPlayer();
+                        int effectiveOnline = virtualPlayerUUIDs.size() - logoutScheduledTime.size();
+                        if (effectiveOnline > currentTargetCount) {
+                            int toKick = effectiveOnline - currentTargetCount;
+                            List<UUID> candidates = new ArrayList<>(virtualPlayerUUIDs);
+                            candidates.removeAll(logoutScheduledTime.keySet());
+                            java.util.Collections.shuffle(candidates);
+                            for (int i = 0; i < toKick && i < candidates.size(); i++) {
+                                startLogoutProcess(candidates.get(i));
+                            }
+                        }
                         
                         processRespawnQueue();
                         socialEngine.tick(nowMs);
@@ -1037,6 +1104,75 @@ prepareAndSpawnVirtualPlayer();
 		nameToUuidIndex.put(name, player.getUuid()); // 维护索引
 		storage.markDirty();
 	}
+	// V5.56: 标记 spawn 完成时间，供 processPendingSpawns cooldown 门控
+	this.lastSpawnCompletedAt = System.currentTimeMillis();
+    }
+
+    /** V5.56: ProfileFetcher 完成皮肤获取后调用此方法入队，而不是直接 server.execute(spawn) */
+    public void enqueueSpawn(Runnable spawnTask) {
+        pendingSpawnQueue.offer(spawnTask);
+    }
+
+    /** V5.57: PlayerSpawner.tryDetectColdChunk 注册 forced chunk 给本管理器,/maohi off / stop()
+     *   时由 releaseForcedSpawnChunks 兜底释放,防止 bot 异常下线时 chunk 永久 forced。 */
+    public void addForcedSpawnChunk(long packedChunk) {
+        forcedSpawnChunks.add(packedChunk);
+    }
+
+    /** V5.57: 启动期还原所有 &lt;uuid&gt;.dat.bak → &lt;uuid&gt;.dat,保证 tryDetectColdChunk 改写过程
+     *   被异常中断(进程崩溃 / chunk 永远不加载)时,真实下线位置不丢失。还原后删除 .bak。
+     *   静默失败:还原失败的 .bak 保留在磁盘供人工排查,不阻塞启动。 */
+    private void restorePlayerDataBackups() {
+        try {
+            java.io.File playerDataDir = server.getSavePath(
+                net.minecraft.util.WorldSavePath.PLAYERDATA).toFile();
+            if (!playerDataDir.isDirectory()) return;
+            java.io.File[] bakFiles = playerDataDir.listFiles((dir, n) -> n.endsWith(".dat.bak"));
+            if (bakFiles == null || bakFiles.length == 0) return;
+            int restored = 0;
+            for (java.io.File bak : bakFiles) {
+                try {
+                    String bakName = bak.getName();
+                    java.io.File dat = new java.io.File(bak.getParentFile(),
+                        bakName.substring(0, bakName.length() - 4)); // 去掉 ".bak"
+                    java.nio.file.Files.copy(bak.toPath(), dat.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    bak.delete();
+                    restored++;
+                } catch (Throwable t) {
+                    org.slf4j.LoggerFactory.getLogger("Server thread")
+                        .warn("[MaohiTask] playerdata_bak_restore_failed file={} err={}",
+                            bak.getName(), t.toString());
+                }
+            }
+            if (restored > 0) {
+                com.maohi.fakeplayer.TaskLogger.logRaw("SYSTEM", "playerdata_bak_restored", "count", restored);
+            }
+        } catch (Throwable t) {
+            org.slf4j.LoggerFactory.getLogger("Server thread")
+                .warn("[MaohiTask] playerdata_bak_scan_failed: {}", t.toString());
+        }
+    }
+
+    /** V5.56: 从队列中取出一个 spawn 任务执行，受 cooldown + MSPT 双重门控 */
+    private void processPendingSpawns() {
+        if (pendingSpawnQueue.isEmpty()) return;
+        
+        // V5.58: 增加 size 门控，防止队列积压导致无视上限疯狂上线
+        if (virtualPlayerUUIDs.size() >= currentTargetCount) {
+            pendingSpawnQueue.clear();
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        // cooldown 门控：前一个假人登录完成后 10s 内不处理下一个
+        if (now - lastSpawnCompletedAt < SPAWN_COOLDOWN_MS) return;
+        // MSPT 门控：服务器 MSPT > 80 时不加码（让主线程先缓过来）
+        if (server.getAverageTickTime() > 80.0) return;
+        Runnable task = pendingSpawnQueue.poll();
+        if (task != null) {
+            server.execute(task);
+        }
     }
 
     // --- Getters for PlayerSpawner ---
