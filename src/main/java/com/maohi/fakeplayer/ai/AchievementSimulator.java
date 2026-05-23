@@ -90,6 +90,7 @@ public final class AchievementSimulator {
 
 				personality.unlockedAdvancements.add(advId);
 				personality.hasUnlockedThisSession = true;
+				personality.lastProgressAt = System.currentTimeMillis(); // V5.59 (idle-rescue)
 				newlyObserved++;
 				com.maohi.fakeplayer.TaskLogger.log(p, "achievement_unlocked", "id", advId);
 				com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(p.getUuid());
@@ -223,6 +224,7 @@ public final class AchievementSimulator {
 	private static int grantOne(ServerPlayerEntity p, Personality personality, String advId, String trigger) {
 		if (!personality.unlockedAdvancements.add(advId)) return 0;
 		personality.hasUnlockedThisSession = true;
+		personality.lastProgressAt = System.currentTimeMillis(); // V5.59 (idle-rescue)
 		com.maohi.fakeplayer.TaskLogger.log(p, "achievement_unlocked",
 			"id", advId, "via", "behavior_observe", "trigger", trigger);
 		com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(p.getUuid());

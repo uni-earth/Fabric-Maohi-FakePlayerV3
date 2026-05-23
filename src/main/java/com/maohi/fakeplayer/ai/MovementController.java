@@ -889,8 +889,9 @@ public class MovementController {
 	 * planA B-3: 检查附近指定半径内是否有真实玩家(排除 fake bots)。
 	 *   teleport 前必须确认无真人观察,否则瞬移会暴露假人指纹。
 	 *   多 bot 互相看到不算观察者(它们一起 spawn 一起卡,没有可信"目击者")。
+	 * V5.59: 改 public,VPM.forceExploreAfterFailures 的 teleport 分支复用。
 	 */
-	private static boolean hasNearbyRealObserver(ServerPlayerEntity p, ServerWorld world, double radius) {
+	public static boolean hasNearbyRealObserver(ServerPlayerEntity p, ServerWorld world, double radius) {
 		com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
 		double radiusSq = radius * radius;
 		for (ServerPlayerEntity other : world.getServer().getPlayerManager().getPlayerList()) {

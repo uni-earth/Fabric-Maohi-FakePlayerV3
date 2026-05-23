@@ -541,6 +541,7 @@ public final class CraftingBehavior {
 
 		if (advId != null && pers.unlockedAdvancements.add(advId)) {
 			pers.hasUnlockedThisSession = true;
+			pers.lastProgressAt = System.currentTimeMillis(); // V5.59 (idle-rescue)
 			com.maohi.fakeplayer.TaskLogger.log(player, "achievement_unlocked",
 				"id", advId, "via", "direct_grant",
 				"trigger", net.minecraft.registry.Registries.ITEM.getId(target).getPath());

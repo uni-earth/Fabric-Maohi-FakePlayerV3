@@ -194,6 +194,7 @@ public final class SmeltingBehavior {
 		com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(player);
 		if (pers != null && pers.unlockedAdvancements.add("story/smelt_iron")) {
 			pers.hasUnlockedThisSession = true;
+			pers.lastProgressAt = System.currentTimeMillis(); // V5.59 (idle-rescue)
 			com.maohi.fakeplayer.TaskLogger.log(player, "achievement_unlocked",
 				"id", "story/smelt_iron", "via", "direct_grant", "trigger", "smelt_done");
 			com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(player.getUuid());

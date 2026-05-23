@@ -85,6 +85,19 @@ public class VirtualPlayerManager {
     private volatile long lastLogoutDispatchedAt = 0L;
     private static final long LOGOUT_COOLDOWN_MS = 1_000L;
     private final java.util.concurrent.ConcurrentLinkedQueue<UUID> pendingLogoutQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    // V5.59 (fix): "接力踢人链" 时序漏洞修复。
+    //   原 bug:manageLoop 同一个 server.execute lambda 内,L692-705 removeIf 把 farewell
+    //     到期的假人 A 从 logoutScheduledTime 同步移除并调 startLogoutProcessInternal(A),
+    //     后者内部又 server.execute(...) 把 virtualPlayerUUIDs.remove(A) 排到下一个主 tick。
+    //     同 lambda 接着跑 L723 effectiveOnline = virtualPlayerUUIDs.size() - logoutScheduledTime.size()
+    //     时:A 不在 logoutScheduledTime 但仍在 virtualPlayerUUIDs → 虚高 1 → L729 触发随机踢人
+    //     B → B 走 farewell → 5-15s 后 B 到期 → 再次重演 → 接力链永动,每 5-15s 强制踢一只。
+    //     pendingLogoutQueue 1s cooldown 等待期同样满足"在 virtualPlayerUUIDs 不在 logoutScheduledTime"
+    //     的状态,把虚高窗口从 ~50ms 拉长到 ≥1s,放大症状。
+    //   修法:startLogoutProcessInternal 入口加 uuid 到本集合 → effectiveOnline 公式同时减去
+    //     本集合 size → dispatchLogout 的主线程 lambda 在 virtualPlayerUUIDs.remove(uuid) 之后
+    //     才移出 → 整个 in-flight 期间公式正确,链条无法启动。
+    private final java.util.Set<UUID> inFlightLogouts = java.util.concurrent.ConcurrentHashMap.newKeySet();
     // V5.58 (option E): 长期 0 进度 bot 兜底 kick 机制。
     //   场景:bot 上线 >1h 但 ach==0 && mined==0 → 多半被某种状态卡死
     //   (chunk_not_loaded 长期等待、setTask 失败循环、世界数据异常等),
@@ -92,8 +105,18 @@ public class VirtualPlayerManager {
     //   90s 一次扫描:30s 太密会增加主线程稳态压力,90s 既保留时效又留出喘息(用户反馈)。
     //   单 scan 最多 kick 1 只,避免与 LOGOUT_COOLDOWN_MS(1s)叠加成 onDisconnected burst。
     private long lastIdleProgressScanAt = 0L;
-    private static final long IDLE_PROGRESS_SCAN_INTERVAL_MS = 300_000L;
-    private static final long IDLE_PROGRESS_THRESHOLD_MS = 3_600_000L; // 1h
+    private static final long IDLE_PROGRESS_SCAN_INTERVAL_MS = 10 * 60_000L; // V5.59: 10min,卡死 bot 救援节奏(用户指定)
+    // V5.59 (idle-rescue): "无进展时长" 阈值。lastProgressAt 由 spawn / mining / advancement 三类
+    //   事件刷新。30min 给 bot 充分时间完成 wood→stone→iron 的早期进度推进(实测 Ghost_XD 35min
+    //   3 ach + 7 mined,健康 bot 远远小于此阈值);超过即视为卡死无可救药。
+    //   旧逻辑 ach==0 && mined==0 漏掉"挂着 1 个老成就但 30 分钟 0 进展"的情况(Ryan1997 3h41
+    //   挂 1 ach + 0 mined + 442 fails/60s),新逻辑用"距上次实质进展时长"统一覆盖两种画像。
+    private static final long NO_PROGRESS_DURATION_MS = 30 * 60_000L;
+    // V5.59 (idle-rescue): bot 上线后的硬性 grace,防止刚 spawn 的 bot 在 lastProgressAt 还未来得及
+    //   被首条 mine/ach 刷新时被误踢。5min 与 NO_PROGRESS_DURATION_MS 解耦,避免老存档刚加载就被
+    //   立即扫到("loginTimes(now=spawn) - lastProgressAt(spawn 时被赋为 now)=0" 已防误踢,这里
+    //   再加一层硬下限是保险)。
+    private static final long IDLE_RESCUE_MIN_UPTIME_MS = 5 * 60_000L;
     private volatile boolean running = false;
     private Thread managerThread;
 
@@ -720,7 +743,12 @@ prepareAndSpawnVirtualPlayer();
                             }
                         }
                         
-                        int effectiveOnline = virtualPlayerUUIDs.size() - logoutScheduledTime.size();
+                        // V5.59 fix: 同时减去 inFlightLogouts.size(),覆盖
+                        //   "已调 startLogoutProcessInternal 但 dispatchLogout 的主线程 lambda
+                        //   还没跑到 virtualPlayerUUIDs.remove" 这段窗口(直派路径 ~50ms,
+                        //   pendingLogoutQueue 路径 ≥1s)。原公式只减 logoutScheduledTime,
+                        //   导致同 lambda 内 removeIf 触发的 logout 在本行看到虚高 1 → 随机踢人。
+                        int effectiveOnline = virtualPlayerUUIDs.size() - logoutScheduledTime.size() - inFlightLogouts.size();
                         if (effectiveOnline > currentTargetCount) {
                             int toKick = effectiveOnline - currentTargetCount;
                             List<UUID> candidates = new ArrayList<>(virtualPlayerUUIDs);
@@ -947,7 +975,10 @@ prepareAndSpawnVirtualPlayer();
     // --- Getters & Helpers for SocialEngine & Spawner ---
     public List<UUID> getOnlinePlayerUuids() { return virtualPlayerUUIDs; }
     public Personality getPersonality(UUID uuid) { return playerPersonalities.get(uuid); }
-    public boolean isLoggingOut(UUID uuid) { return logoutScheduledTime.containsKey(uuid); }
+    // V5.59: 额外检查 inFlightLogouts,避免 fall-damage / idle-kick 等旁路在 bot 已派遣下线
+    //   但 virtualPlayerUUIDs 尚未清理的窗口里再次调 startLogoutProcessInternal(虽然 Set.add
+    //   幂等无害,但会在 pendingLogoutQueue 里塞重复 uuid,占用队列槽位)。
+    public boolean isLoggingOut(UUID uuid) { return logoutScheduledTime.containsKey(uuid) || inFlightLogouts.contains(uuid); }
 
 	/**
 	 * V3.5: 动态搜索半径 — 流畅时搜更远，卡顿时自动缩小
@@ -1094,6 +1125,11 @@ prepareAndSpawnVirtualPlayer();
 	if (pState.growthPhase == null) { pState.growthPhase = GrowthPhase.WOOD_AGE; }
 	if (pState.phaseEnteredAt <= 0L) { pState.phaseEnteredAt = System.currentTimeMillis(); }
 	if (pState.firstJoinAt <= 0L) { pState.firstJoinAt = System.currentTimeMillis(); }
+	// V5.59 (idle-rescue): 每次 spawn 都把 lastProgressAt 重置为当前时刻,给 bot 完整的
+	//   IDLE_NO_PROGRESS_GRACE_MS grace 期(scanIdleNoProgressBots 据此计算"无进展时长")。
+	//   transient 字段重启后默认 0,这里赋值前不能写 if (<=0) — 否则老存档 spawn 后 0 立刻
+	//   被算成"无进展时长 = now - 0 ≈ 自 1970 年至今"导致首次 scan 必踢。
+	pState.lastProgressAt = System.currentTimeMillis();
 	// V5.23: 国籍语种分配 — 真实 MC 国际服分布 70/8/8/8/6,
 	// 一旦分配就跟随该假人余生不变(老存档无 language 字段时也补一次)
 	if (pState.language == null || pState.language.isEmpty()) {
@@ -1346,6 +1382,10 @@ prepareAndSpawnVirtualPlayer();
 	}
 
     private void startLogoutProcessInternal(UUID uuid) {
+        // V5.59: 标记 in-flight。必须放在 cooldown 判断之前,确保 enqueue 与直派两条路径
+        //   都计入。effectiveOnline 公式据此排除,杜绝 L723 虚高 → 随机踢人接力链。
+        //   Set.add 幂等,重复 startLogoutProcessInternal(同 uuid)安全。
+        inFlightLogouts.add(uuid);
         // V5.58: logout 节流入口。直接同 tick 多只 onDisconnected 会让 vanilla
         //   saveSync + broadcast + chunk unload 在主线程累积,触发秒级 burst。
         //   1s 节流后超额 logout 入 pendingLogoutQueue,由 processPendingLogouts 错峰处理。
@@ -1416,6 +1456,10 @@ prepareAndSpawnVirtualPlayer();
             }
             // 项目内部状态深度清理(独立于 vanilla PlayerManager,杜绝内存泄漏)
             virtualPlayerUUIDs.remove(uuid);
+            // V5.59: bot 已真正从 virtualPlayerUUIDs 离场,解除 in-flight 占位。
+            //   必须在 virtualPlayerUUIDs.remove 之后调,保证 effectiveOnline 公式
+            //   在整个 startLogoutProcessInternal → dispatchLogout 期间都看到一致状态。
+            inFlightLogouts.remove(uuid);
             virtualPlayerNames.remove(uuid);
             playerPersonalities.remove(uuid);
             fakeConnections.remove(uuid);
@@ -1436,22 +1480,30 @@ prepareAndSpawnVirtualPlayer();
     }
 
     /**
-     * V5.58 (option E): 长期 0 进度 bot 兜底 kick 扫描。
+     * V5.59 (idle-rescue, 重写): 卡死 bot 兜底 kick 扫描——双维度判定。
      * <p>
-     * 90s 节流一次,遍历 virtualPlayerUUIDs 寻找在线 > 1h 且 ach==0 && mined==0 的 bot,
-     * kick 一只(单 scan 最多 1 只),并同步把它从 knownPlayers / nameToUuidIndex 移除,
-     * 防止下轮 spawn 的 recruit-from-saved 路径又把同一 UUID/名字捞回来重蹈同一卡点(livelock)。
+     * 旧 V5.58 实现用 "uptime>1h && ach==0 && mined==0" 静态判定,有两个漏洞:
+     *  - 漏判画像 A: bot 早期解锁 1 个 ach 后再卡死,ach!=0 永远绕过 kick(本次 Ryan1997
+     *    3h41,挂 1 老成就 + 0 mined + 60s 442 次 task_fail,完美命中此漏洞)。
+     *  - 救援太慢: 1h 阈值 + 5min 扫描间隔 + 单次 1 只 → 多只卡死 bot 排队,后到的可能
+     *    挂死数小时(本次 Lily2007 3h12 ach=0 mined=0 仍未被踢出 = livelock 队尾)。
      * <p>
-     * 线程:manageLoop worker。startLogoutProcessInternal → dispatchLogout 内部走
-     * server.execute,实际 onDisconnected 在主线程 next tick 执行,与 LOGOUT_COOLDOWN_MS(1s)
-     * 节流叠加,这里再做 "单 scan 1 只" 三重保护,杜绝同 tick 多只下线 burst。
+     * 新实现按 "最近 30min 是否有任何实质进展" 判定。实质进展由 lastProgressAt 时间戳
+     * 跟踪,在 blocksMinedTotal++ 与 unlockedAdvancements.add()==true 两类事件处刷新
+     * (spawn 时初始化为当前时刻,给完整 grace 期)。
      * <p>
-     * 阈值取舍:
-     *  - 1h:正常 bot 上线 10~20 分钟就有第一条 ach(min/wood, story/mine_stone),
-     *    1h 还 0 进度只可能是被卡死(chunk_not_loaded 持续等待 / setTask 失败循环 /
-     *    世界异常等),tick 内自救路径已无解。
-     *  - mined==0:即便 ach 系统 mixin 异常没记上,只要在动就有挖方块计数;mined==0
-     *    意味着这只 bot 几乎没动过,佐证 1h 阈值的"卡死"判定。
+     * 阈值:
+     *  - IDLE_RESCUE_MIN_UPTIME_MS = 5min: 硬性上线下限,防新 spawn 的 bot 被误踢
+     *  - NO_PROGRESS_DURATION_MS = 30min: 距上次进展超过此值即视为卡死
+     *  - IDLE_PROGRESS_SCAN_INTERVAL_MS = 10min: 慢节奏轮询,避免与其它后台节流叠加冲击,
+     *    单只卡死 bot 的最坏救援延迟 = scan 间隔 + NO_PROGRESS_DURATION_MS ≈ 40min
+     * <p>
+     * 三重保护(同旧实现): 10min 节流扫描 + 单 scan 仅 kick 1 只 + LOGOUT_COOLDOWN_MS 1s
+     * 节流出口,杜绝同 tick 多只 onDisconnected burst。
+     * <p>
+     * livelock 防御: kick 前清 knownPlayers + nameToUuidIndex,下轮 spawn 的 60% recruit-from-saved
+     * 路径不会再捞回同名 UUID,bot 走 fresh random 名字 + 新坐标(pickScatteredSpawn 散布),
+     * 大概率落到与上次完全不同的 chunk,避开同地形陷阱。
      */
     private void scanIdleNoProgressBots() {
         long now = System.currentTimeMillis();
@@ -1462,34 +1514,43 @@ prepareAndSpawnVirtualPlayer();
             Long loginAt = loginTimes.get(uuid);
             if (loginAt == null) continue;
             long uptime = now - loginAt;
-            if (uptime < IDLE_PROGRESS_THRESHOLD_MS) continue;
+            if (uptime < IDLE_RESCUE_MIN_UPTIME_MS) continue; // V5.59: 新 bot 硬性 grace
 
             Personality pers = playerPersonalities.get(uuid);
             if (pers == null) continue;
+
+            // V5.59 双维度判定: lastProgressAt 在 spawn / mine / advancement 三类事件处刷新。
+            //   若 30min 内一次都没刷新,无论历史 ach/mined 数字多少都视为卡死。
+            //   防御 lastProgressAt==0L 异常值(理论上 spawn 已赋值,这里兜底防字段被外部清零):
+            //   ==0L 时用 loginAt 替代,保证 noProgressMs 总在合理区间。
+            long lastProgress = pers.lastProgressAt > 0L ? pers.lastProgressAt : loginAt;
+            long noProgressMs = now - lastProgress;
+            if (noProgressMs < NO_PROGRESS_DURATION_MS) continue;
+
+            // 命中: bot 已 5min+ 在线且 30min+ 无任何实质进展
+            String name = virtualPlayerNames.getOrDefault(uuid, uuid.toString());
             int ach = (pers.unlockedAdvancements == null) ? 0 : pers.unlockedAdvancements.size();
             int mined = pers.blocksMinedTotal;
-            if (ach != 0 || mined != 0) continue;
-
-            // 命中:1h+ 在线但完全 0 进度。
-            String name = virtualPlayerNames.getOrDefault(uuid, uuid.toString());
             com.maohi.fakeplayer.TaskLogger.logRaw(
                 name,
                 "kick_idle_no_progress",
                 "uptimeMs", uptime,
+                "noProgressMs", noProgressMs,
                 "ach", ach,
-                "mined", mined);
+                "mined", mined,
+                "lastTarget", pers.taskTarget);
 
-            // livelock 防御:先从存档索引拔掉,即使后续 kick 路径异常也保证下轮
+            // livelock 防御: 先从存档索引拔掉,即使后续 kick 路径异常也保证下轮
             //   spawn 不会再 recruit 同一只(走 fresh random 名字 + 新 UUID)。
             knownPlayers.remove(uuid);
             nameToUuidIndex.remove(name);
             storage.markDirty();
 
-            // 走标准 logout 节流入口:1s LOGOUT_COOLDOWN_MS + dispatchLogout 切主线程。
+            // 走标准 logout 节流入口: 1s LOGOUT_COOLDOWN_MS + dispatchLogout 切主线程。
             startLogoutProcessInternal(uuid);
 
-            // 单 scan 仅 kick 1 只:90s 节流 × 1s logout 节流 × "1 只/扫"
-            //   三重保护,确保即便有 10 只命中也按 90s 节奏逐一下线。
+            // 单 scan 仅 kick 1 只: 10min 节流 × 1s logout 节流 × "1 只/扫"
+            //   三重保护,确保即便有 10 只命中也按 10min 节奏逐一下线。
             return;
         }
     }
@@ -1541,6 +1602,12 @@ prepareAndSpawnVirtualPlayer();
 		deathTimestamps.remove(uuid);
 	}
 	storage.saveSync(knownPlayers);
+	// V5.59: stop() 直接遍历 virtualPlayerUUIDs 调 onDisconnected,不经 startLogoutProcessInternal,
+	//   inFlightLogouts 理论上应为空;但若关服时刚好有 dispatch 进行中(lambda 未跑),残留 uuid
+	//   会污染下次热重载的 effectiveOnline。显式清一次,与 pendingLogoutQueue / logoutScheduledTime
+	//   一同复位(它们也在上面循环中按 uuid 单独清,这里冗余兜底)。
+	inFlightLogouts.clear();
+	pendingLogoutQueue.clear();
 	}
 
     public void saveData() {
@@ -1646,6 +1713,47 @@ prepareAndSpawnVirtualPlayer();
         // V5.43 P-1.D: 无树 biome 直接拉到 4 级起步
         if (isTreelessBiome(p) && personality.forceExploreEscalation < 4) {
             personality.forceExploreEscalation = 4;
+        }
+        // V5.59 (teleport-rescue): forceExploreEscalation 已升至 4+ 表示 bot 至少经历 4 次远征 +
+        //   多轮内部 setExplore 全失败 (resetTaskFailCount 真实成功才会清零)。此时 80 格 force_explore
+        //   仍打不开局面 = 地形结构性卡死 (山尖/孤岛/cave/无树带边缘),复用 sink_guard_far_teleport
+        //   策略远征到 500-1500 格外,大概率落到完全不同 biome。
+        //   触发频率: 一只 bot 累到 escalation=4 通常要数分钟到 10+ 分钟的 task_fail 累积,与 6s cooldown
+        //   叠加单 bot 单次救援 = 可控。覆盖 30min 无进展才走 scanIdleNoProgressBots kick 之前的
+        //   "中段救援空白",把 Lily2007/Ryan1997 这种"卡得不够久还没被 idle scan 踢"的 bot 提前拉出。
+        long nowMs = System.currentTimeMillis();
+        boolean cooldownOk = nowMs - personality.lastStuckTeleportAt > 6_000L;
+        net.minecraft.server.world.ServerWorld world = (net.minecraft.server.world.ServerWorld) p.getEntityWorld();
+        if (personality.forceExploreEscalation >= 4
+                && cooldownOk
+                && !com.maohi.fakeplayer.ai.MovementController.hasNearbyRealObserver(p, world, 32)) {
+            double angle = rng.nextDouble(0, 2 * Math.PI);
+            double dist = 500.0 + rng.nextDouble(0, 1000.0);
+            int farX = (int) (p.getX() + Math.cos(angle) * dist);
+            int farZ = (int) (p.getZ() + Math.sin(angle) * dist);
+            // 不主动加载远征落点 chunk (与 sink_guard_far_teleport 同款决策): getSafeTopY 落空时
+            //   返 fallback,bot 卡空中 → lagFreezeUntil 期间 vanilla 后台异步 promote → stuck_kick
+            //   兜底重 spawn,主线程零阻塞。
+            int farSurfaceY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(world, farX, farZ, 80);
+            double newY = farSurfaceY + 1.0;
+            float newYaw = rng.nextFloat() * 360f - 180f;
+            p.refreshPositionAndAngles(farX + 0.5, newY, farZ + 0.5, newYaw, p.getPitch());
+            personality.lastStuckTeleportAt = nowMs;
+            personality.lagFreezeUntil = nowMs + 15_000L;
+            personality.heightFloorY = newY - 10.0;
+            personality.forceExploreEscalation = 0; // 远征到新位置 → 重置阶梯,从 0 起重新评估
+            personality.taskFailCount = 0;
+            personality.lastFailedTarget = null;
+            personality.failedTargets.clear();
+            personality.currentTask = TaskType.IDLE;
+            personality.taskTarget = null;
+            personality.currentPath.clear();
+            com.maohi.fakeplayer.TaskLogger.log(p, "force_explore_teleport",
+                "from", String.format("(%d,%d,%d)", (int) p.getX(), (int) p.getY(), (int) p.getZ()),
+                "to", String.format("(%d,%.1f,%d)", farX, newY, farZ),
+                "dist", String.format("%.0f", dist),
+                "trigger", "escalation>=4");
+            return;
         }
         int escalation = Math.min(personality.forceExploreEscalation, 6); // cap 阶梯到 6 级
         // P20 A: 原 1→60..6→310,bot 一次 force_explore 跨 300 格 → 30s 走 395 格 → chunk-flood
@@ -2650,6 +2758,7 @@ prepareAndSpawnVirtualPlayer();
                 java.util.function.Consumer<String> directGrant = (advId) -> {
                     if (personality.unlockedAdvancements.add(advId)) {
                         personality.hasUnlockedThisSession = true;
+                        personality.lastProgressAt = System.currentTimeMillis(); // V5.59 (idle-rescue)
                         com.maohi.fakeplayer.TaskLogger.log(p, "achievement_unlocked",
                             "id", advId, "via", "direct_grant", "trigger", minedType);
                         com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(p.getUuid());
@@ -2781,6 +2890,7 @@ prepareAndSpawnVirtualPlayer();
                 personality.miningPos = null;
                 personality.miningElapsedTicks = 0;
                 personality.blocksMinedTotal++;
+                personality.lastProgressAt = System.currentTimeMillis(); // V5.59 (idle-rescue)
                 // V5.30 真实挖断方块 → 失败计数清零(久远失败不该阻塞正常作业流)
                 Personality.resetTaskFailCount(personality);
                 if (personality.miningSkill < 1.5) personality.miningSkill += 0.001;

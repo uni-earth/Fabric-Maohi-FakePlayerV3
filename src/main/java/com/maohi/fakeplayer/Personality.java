@@ -225,6 +225,16 @@ public class Personality {
 	public long lastDeathTick = 0;   // 上次死亡时间（用于模拟死后沮丧）
 	public int blocksMinedTotal = 0; // 总挖掘数
 
+	// V5.59 (idle-rescue): 最近一次"实质进展"的 wall-clock 时间戳(ms)。
+	//   实质进展 = blocksMinedTotal++ 成功 / unlockedAdvancements.add 返回 true(新成就解锁)。
+	//   spawn 时由 VPM.registerSpawnedPlayer 初始化为 firstJoinAt(或当前时刻),保证新 bot
+	//   有完整 grace period 不会一上线就被算"长期无进展"。
+	//   VPM.scanIdleNoProgressBots 用 (now - lastProgressAt) 判断 bot 是否真的卡死,
+	//   修复老版"ach!=0 || mined!=0 即放过"导致 ach=1 但 30 分钟 0 进展的 bot 永不被踢的漏洞。
+	//   transient 是因为该字段属于"运行期诊断"语义,不写盘 — bot 下线/重启后下次 spawn
+	//   重新计时,与"在线无进展"的判定语义一致(老存档加载不会带过期的 lastProgressAt 误踢)。
+	public transient long lastProgressAt = 0L;
+
 	// V5.0 B: 任务队列
 	public static class TaskEntry {
 		public TaskType type;

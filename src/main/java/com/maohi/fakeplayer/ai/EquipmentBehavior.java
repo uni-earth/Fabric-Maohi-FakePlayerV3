@@ -149,6 +149,7 @@ public final class EquipmentBehavior {
 
 		pers.unlockedAdvancements.add("story/shiny_gear");
 		pers.hasUnlockedThisSession = true;
+		pers.lastProgressAt = System.currentTimeMillis(); // V5.59 (idle-rescue)
 		com.maohi.fakeplayer.TaskLogger.log(player, "achievement_unlocked",
 			"id", "story/shiny_gear", "via", "equipment_check");
 		com.maohi.fakeplayer.TaskMetrics.countAchievementUnlocked(player.getUuid());
