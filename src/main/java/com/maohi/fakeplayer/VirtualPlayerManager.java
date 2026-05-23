@@ -460,9 +460,12 @@ public class VirtualPlayerManager {
 		java.lang.management.MemoryUsage heap = memBean.getHeapMemoryUsage();
 		long usedMb = heap.getUsed() / (1024L * 1024L);
 		long maxMb = heap.getMax() / (1024L * 1024L);
-		org.slf4j.LoggerFactory.getLogger("Server thread").warn(
-			"[MaohiDiag] gc_event count={} totalPauseMs={} heapUsedMb={} heapMaxMb={} bots={}",
-			gcDelta, gcTimeDelta, usedMb, maxMb, virtualPlayerUUIDs.size());
+		com.maohi.MaohiConfig cfg = com.maohi.MaohiConfig.getInstance();
+		if (cfg != null && cfg.debugGcDiag) {
+			org.slf4j.LoggerFactory.getLogger("Server thread").warn(
+				"[MaohiDiag] gc_event count={} totalPauseMs={} heapUsedMb={} heapMaxMb={} bots={}",
+				gcDelta, gcTimeDelta, usedMb, maxMb, virtualPlayerUUIDs.size());
+		}
 	}
 	lastTotalGcCount = totalGcCount;
 	lastTotalGcTimeMs = totalGcTimeMs;

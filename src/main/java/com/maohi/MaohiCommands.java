@@ -254,6 +254,11 @@ public class MaohiCommands {
                     .then(CommandManager.literal("off")
                         .executes(ctx -> safeRun(ctx, manager -> toggleDebug(ctx, Boolean.FALSE))))
                 )
+
+                // === /maohi gc_diag ===
+                .then(CommandManager.literal("gc_diag")
+                    .executes(ctx -> safeRun(ctx, manager -> toggleGcDiag(ctx, null)))
+                )
         );
     }
 
@@ -265,6 +270,16 @@ public class MaohiCommands {
         feedback(ctx.getSource(), newValue
             ? "§a[FS Core] debugVirtualTasks = §etrue §7(TaskLogger/TaskMetrics 已开启;重启不保留)"
             : "§a[FS Core] debugVirtualTasks = §7false §7(TaskLogger/TaskMetrics 已关闭)");
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int toggleGcDiag(CommandContext<ServerCommandSource> ctx, Boolean target) {
+        MaohiConfig cfg = MaohiConfig.getInstance();
+        boolean newValue = target != null ? target : !cfg.debugGcDiag;
+        cfg.debugGcDiag = newValue;
+        feedback(ctx.getSource(), newValue
+            ? "§a[FS Core] debugGcDiag = §etrue §7(GC 诊断追踪已开启;重启不保留)"
+            : "§a[FS Core] debugGcDiag = §7false §7(GC 诊断追踪已关闭)");
         return Command.SINGLE_SUCCESS;
     }
 
