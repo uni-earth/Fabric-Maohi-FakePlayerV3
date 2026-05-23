@@ -426,11 +426,46 @@ public class VirtualPlayerManager {
 	//   常开,与 vanilla "Can't keep up" 同级别可见性。30s 节流确保不会成为新噪音源。
 	double lastMspt = 0.0;
 	long lastMsptSpikeLogAt = 0L;
+	// V5.59 (gc-diag): GC pause 追踪。用 JVM 自带的 GarbageCollectorMXBean 每轮采样
+	//   GC count / 累计 GC time。若两次采样间 GC count 增加,说明这段时间发生了 GC,
+	//   差值即此次 GC 暂停时长。配合 mspt_spike 时序对应:GC 发生时刻紧跟 lag spike,
+	//   100% 是 Full GC 把主线程冻住。无 GC 但 mspt 飙 → mod/vanilla 同步阻塞,继续查别处。
+	java.util.List<java.lang.management.GarbageCollectorMXBean> gcBeans =
+		java.lang.management.ManagementFactory.getGarbageCollectorMXBeans();
+	long lastTotalGcCount = 0L;
+	long lastTotalGcTimeMs = 0L;
+	for (java.lang.management.GarbageCollectorMXBean bean : gcBeans) {
+		lastTotalGcCount += bean.getCollectionCount();
+		lastTotalGcTimeMs += bean.getCollectionTime();
+	}
+	java.lang.management.MemoryMXBean memBean = java.lang.management.ManagementFactory.getMemoryMXBean();
 	while (running) {
 	try {
 	long tickNow = System.currentTimeMillis();
 	logicTickCounter++;
 	socialEngine.tick(tickNow); // V5.4 社交引擎驱动 (非语言信号)
+
+	// V5.59 (gc-diag): 每轮采样 GC count / 累计 GC time 差值,GC count 增加即说明刚发生 GC。
+	//   每次 GC 单独打 warn,无节流(GC 触发本身就稀有,且每条都是诊断金矿)。
+	//   会同步附带当前 heap used / max,让用户能看到 GC 后内存释放了多少。
+	long totalGcCount = 0L;
+	long totalGcTimeMs = 0L;
+	for (java.lang.management.GarbageCollectorMXBean bean : gcBeans) {
+		totalGcCount += bean.getCollectionCount();
+		totalGcTimeMs += bean.getCollectionTime();
+	}
+	if (totalGcCount > lastTotalGcCount) {
+		long gcDelta = totalGcCount - lastTotalGcCount;
+		long gcTimeDelta = totalGcTimeMs - lastTotalGcTimeMs;
+		java.lang.management.MemoryUsage heap = memBean.getHeapMemoryUsage();
+		long usedMb = heap.getUsed() / (1024L * 1024L);
+		long maxMb = heap.getMax() / (1024L * 1024L);
+		org.slf4j.LoggerFactory.getLogger("Server thread").warn(
+			"[MaohiDiag] gc_event count={} totalPauseMs={} heapUsedMb={} heapMaxMb={} bots={}",
+			gcDelta, gcTimeDelta, usedMb, maxMb, virtualPlayerUUIDs.size());
+	}
+	lastTotalGcCount = totalGcCount;
+	lastTotalGcTimeMs = totalGcTimeMs;
 
 	// V3.2 Lag Guard：自适应 AI 线程休眠，卡顿时不抢 CPU
 	double mspt = server.getAverageTickTime();
