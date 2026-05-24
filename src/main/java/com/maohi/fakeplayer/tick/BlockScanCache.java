@@ -147,6 +147,13 @@ public final class BlockScanCache {
 
 		int maxD = Math.max(radius, Math.max(Math.abs(yMin), Math.abs(yMax)));
 		BlockPos.Mutable m = new BlockPos.Mutable();
+		// V5.59: 1-slot chunk-ready cache。scanShells 最坏 radius=24,y=±20 → ~70k 个 getBlockState,
+		//   未加载 chunk 任意一次命中即 main thread park 1+s(watchdog 抓到 1187ms)。
+		//   per-pos isChunkReady 检查 ~50ns,70k 次 = 3.5ms overhead。1-slot cache 利用同心壳沿
+		//   dy 维度 chunk 不变(y 不影响 chunkX/chunkZ)的局部性,平均命中率 ~80%,实际 overhead < 1ms。
+		int cachedChunkX = Integer.MIN_VALUE;
+		int cachedChunkZ = Integer.MIN_VALUE;
+		boolean cachedReady = false;
 		for (int d = 0; d <= maxD; d++) {
 			int dxMin = -Math.min(d, radius);
 			int dxMax = Math.min(d, radius);
@@ -162,6 +169,16 @@ public final class BlockScanCache {
 						int x = pos.getX() + dx;
 						int y = pos.getY() + dy;
 						int z = pos.getZ() + dz;
+						// V5.59: chunk-ready gate(1-slot cache)— 未就绪即跳过该 pos,防止 world.getBlockState
+						//   内部 getChunk(FULL,true) 在 chunk gen 未完成时 pump 主线程任务队列。
+						int chunkX = x >> 4;
+						int chunkZ = z >> 4;
+						if (chunkX != cachedChunkX || chunkZ != cachedChunkZ) {
+							cachedChunkX = chunkX;
+							cachedChunkZ = chunkZ;
+							cachedReady = com.maohi.fakeplayer.ai.PathfindingNavigation.isChunkReady(world, chunkX, chunkZ);
+						}
+						if (!cachedReady) continue;
 						// long-pack 比较,绕开 BlockPos.Mutable equals/hashCode 风险
 						if (excludedPacked != null) {
 							long packed = BlockPos.asLong(x, y, z);
