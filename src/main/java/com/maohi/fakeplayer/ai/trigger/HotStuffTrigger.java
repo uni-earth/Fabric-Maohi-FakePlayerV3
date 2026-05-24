@@ -89,8 +89,11 @@ public final class HotStuffTrigger implements AchievementTrigger {
 					for (int dz = -d; dz <= d; dz++) {
 						if (Math.max(Math.abs(dx), Math.abs(dz)) != d) continue;
 						BlockPos p = center.add(dx, dy, dz);
+						// V5.59+: chunk-ready 预检，跨 chunk 时跳过未就绪坐标
+						if (!com.maohi.fakeplayer.ai.PathfindingNavigation.isChunkReady(
+								world, p.getX() >> 4, p.getZ() >> 4)) continue;
 						if (world.getBlockState(p).isOf(Blocks.LAVA)
-							&& world.getFluidState(p).isStill()) {
+								&& world.getFluidState(p).isStill()) {
 							return p;
 						}
 					}

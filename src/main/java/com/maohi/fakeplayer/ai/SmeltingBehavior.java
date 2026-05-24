@@ -244,6 +244,9 @@ public final class SmeltingBehavior {
 					if (Math.max(Math.abs(dx), Math.abs(dz)) != d) continue;
 					for (int dy = -3; dy <= 3; dy++) {
 						mut.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz);
+						// V5.59+: chunk-ready 预检，跨 chunk 时跳过未就绪坐标
+						if (!com.maohi.fakeplayer.ai.PathfindingNavigation.isChunkReady(
+								world, mut.getX() >> 4, mut.getZ() >> 4)) continue;
 						if (world.getBlockState(mut).isOf(Blocks.FURNACE)) {
 							return mut.toImmutable();
 						}
