@@ -419,11 +419,18 @@ public class PlayerSpawner {
         }
         
         // P23-C：至少 1 个水平方向可通行（防 1×1 坑 spawn）
+        // V5.59+: pos.offset(dir) 可能跨越相邻 chunk，改用 safeGetBlockState 保护。
+        //   null = chunk 未就绪，视为"非空气"（保守处理，跳过该方向）。
         boolean anyHorizontalExit = false;
         for (net.minecraft.util.math.Direction dir : new net.minecraft.util.math.Direction[]{
                 net.minecraft.util.math.Direction.NORTH, net.minecraft.util.math.Direction.SOUTH, net.minecraft.util.math.Direction.EAST, net.minecraft.util.math.Direction.WEST}) {
             net.minecraft.util.math.BlockPos side = pos.offset(dir);
-            if (world.getBlockState(side).isAir() && world.getBlockState(side.up()).isAir()) {
+            net.minecraft.block.BlockState sideState =
+                com.maohi.fakeplayer.ai.PathfindingNavigation.safeGetBlockState(world, side);
+            net.minecraft.block.BlockState sideUpState =
+                com.maohi.fakeplayer.ai.PathfindingNavigation.safeGetBlockState(world, side.up());
+            if (sideState != null && sideState.isAir()
+                    && sideUpState != null && sideUpState.isAir()) {
                 anyHorizontalExit = true;
                 break;
             }

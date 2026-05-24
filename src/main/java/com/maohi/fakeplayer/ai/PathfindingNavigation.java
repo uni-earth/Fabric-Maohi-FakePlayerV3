@@ -242,6 +242,10 @@ public class PathfindingNavigation {
 	 *   API 做 HP-guarded 决策——bot 健康时可主动跳 4 格扣 1 心断崖以脱困,低 HP 时不冒险。
 	 */
 	public static int getFallDepth(ServerWorld world, BlockPos pos, int maxScan) {
+		// V5.59+: chunk-ready 预检。pos 所在 chunk 未就绪时 getBlockState 会 pump 主线程任务队列。
+		//   未就绪返 0(视为无落差),调用方后续的 isHazardousBlock 会对同一未就绪 chunk 返 true
+		//   令 bot 停步,等效行为正确。
+		if (!isChunkFullyLoaded(world, pos)) return 0;
 		BlockPos cur = pos.down();
 		int depth = 0;
 		while (depth < maxScan && world.getBlockState(cur).isAir()) {
@@ -291,6 +295,10 @@ public class PathfindingNavigation {
 	 *  (2 格深水会有 ground=water 命中,自然被排除,bot 不会被引去淹死)
 	 */
 	public static boolean isWalkable(ServerWorld world, BlockPos pos) {
+		// V5.59+: chunk-ready 预检。A* 热路径对每个邻居节点都调本方法,pos/pos.down()/pos.up()
+		//   同属一个 chunk;未就绪时直接 getBlockState 会 pump 主线程任务队列。
+		//   未就绪返 false = 该节点不可达,A* 自然绕开,0 阻塞。
+		if (!isChunkFullyLoaded(world, pos)) return false;
 		net.minecraft.block.BlockState groundState = world.getBlockState(pos.down());
 		net.minecraft.block.BlockState atState = world.getBlockState(pos);
 		net.minecraft.block.BlockState upState = world.getBlockState(pos.up());

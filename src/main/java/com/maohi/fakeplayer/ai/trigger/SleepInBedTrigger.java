@@ -157,6 +157,11 @@ public final class SleepInBedTrigger implements AchievementTrigger {
 					for (int dz = -d; dz <= d; dz++) {
 						if (Math.max(Math.abs(dx), Math.abs(dz)) != d) continue;
 						BlockPos p = center.add(dx, dy, dz);
+						// V5.59+: chunk-ready 预检。半径 10 格遍历约 2200 个坐标，跨越多个
+						//   chunk 边界，裸调 getBlockState 在主线程会逐一 pump 任务队列。
+						//   未就绪跳过该坐标，不影响功能——未加载 chunk 里不会有玩家放的床。
+						if (!com.maohi.fakeplayer.ai.PathfindingNavigation.isChunkReady(
+								world, p.getX() >> 4, p.getZ() >> 4)) continue;
 						if (world.getBlockState(p).getBlock() instanceof BedBlock) return p;
 					}
 				}
