@@ -335,10 +335,20 @@ public final class PhaseStoneAge implements Phase {
     /**
      * V5.22: 从脚下向下扫 8 格找真正的 stone/cobblestone/deepslate,
      * 给 mine_stone 成就一个真实可达的目标。
+     *
+     * V5.59: 垂直扫描中 chunkX/chunkZ 不变(dy 不影响 chunk 坐标),只需在循环前做一次
+     * chunk-ready 预检。未就绪时直接返回 null — watchdog 已抓到本方法路径导致的 stall:
+     * world.getBlockState(check) 内部 getChunk(FULL,true) 在 chunk gen 未完成时 pump
+     * 主线程任务队列。
      */
     private static BlockPos scanDownForStone(ServerPlayerEntity player) {
         ServerWorld world = player.getEntityWorld();
         BlockPos start = player.getBlockPos();
+        // V5.59: chunk-ready 预检 — 垂直扫描 chunkX/chunkZ 固定,检查一次即可
+        if (!com.maohi.fakeplayer.ai.PathfindingNavigation.isChunkReady(
+                world, start.getX() >> 4, start.getZ() >> 4)) {
+            return null;
+        }
         for (int dy = 1; dy <= 8; dy++) {
             BlockPos check = start.down(dy);
             net.minecraft.block.Block b = world.getBlockState(check).getBlock();
@@ -356,8 +366,16 @@ public final class PhaseStoneAge implements Phase {
      *   后到那个 log 还有 5+ 格垂直距离 > vanilla reach 4.5 格 → 永远挖不到。
      *   实现:沿 -Y 方向连续扫,只要下一格还是 log/wood 就继续下沉,遇到非 log 停止。
      *   最多下沉 16 格(够覆盖 vanilla 最高 jungle 树),防止异常方块结构卡死循环。
+     *
+     * V5.59: 同 scanDownForStone — 垂直扫描 chunkX/chunkZ 固定,循环前做一次 chunk-ready
+     * 预检。未就绪直接返回 topLog(原始位置,调用方已做 dy>12 兜底),避免主线程 park。
      */
     private static BlockPos snapToTreeBase(ServerWorld world, BlockPos topLog) {
+        // V5.59: chunk-ready 预检 — 垂直下沉 chunkX/chunkZ 不变,检查一次即可
+        if (!com.maohi.fakeplayer.ai.PathfindingNavigation.isChunkReady(
+                world, topLog.getX() >> 4, topLog.getZ() >> 4)) {
+            return topLog; // chunk 未就绪,回退到原始坐标,由调用方做 dy>12 过滤
+        }
         BlockPos cur = topLog;
         for (int i = 0; i < 16; i++) {
             BlockPos below = cur.down();
