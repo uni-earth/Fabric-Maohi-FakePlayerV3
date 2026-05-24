@@ -78,6 +78,8 @@ public class Maohi implements ModInitializer {
     public static void onServerStarted(MinecraftServer server) {
         virtualPlayerManager = new com.maohi.fakeplayer.VirtualPlayerManager(server);
         virtualPlayerManager.start();
+        // V5.59: 主线程 lag watchdog 启动。常驻 daemon 线程,无 stall 时 0 输出。
+        com.maohi.fakeplayer.diag.LagWatchdog.start(server);
     }
 
     /**
@@ -87,6 +89,8 @@ public class Maohi implements ModInitializer {
         if (virtualPlayerManager != null) {
             virtualPlayerManager.stop();
         }
+        // V5.59: 关停 watchdog 线程,避免 daemon 在 jvm 关停时仍输出日志
+        com.maohi.fakeplayer.diag.LagWatchdog.stop();
         // V5.23: 关停皮肤抓取线程池,避免 daemon 线程在 jvm 关停时仍跑 HTTP
         com.maohi.fakeplayer.ProfileFetcher.shutdown();
         // V5.37: 清掉 spawn 缓存,下次启动若换 world / 改 worldSpawn 才能拿到新值
@@ -97,6 +101,8 @@ public class Maohi implements ModInitializer {
      * 服务器 Tick 回调 (由 MinecraftServerMixin 调用)
      */
     public static void onServerTick(MinecraftServer server) {
+        // V5.59: 主线程心跳,供 LagWatchdog 检测 stall。单 volatile 写,无锁无分配。
+        com.maohi.fakeplayer.diag.LagWatchdog.heartbeat();
         // 如果后续需要处理每个 tick 的逻辑可在此添加
     }
 }
