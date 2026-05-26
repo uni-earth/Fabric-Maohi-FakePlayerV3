@@ -39,10 +39,16 @@ public final class BiomePrior {
         try {
             ServerWorld world = player.getEntityWorld();
             BlockPos pos = player.getBlockPos();
-            // V5.59: chunk-ready 守卫 — getBiome 内部走 getChunk(FULL,true),在 chunk gen 未完成时
-            //   park 主线程(watchdog 抓到 BiomePrior:41 卡 1170ms)。未就绪降级返回 0(中立),
-            //   下一 tick 区块就绪后自然恢复正常判断,功能 0 损失。
-            if (!world.isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) return 0;
+            // 修复: getBiome 内部采用噪声抖动采样(Jittered Sampling)，可能越界查询相邻区块的群系。
+            // 若相邻区块未就绪，会导致主线程触发 create=true 的同步等待生成，造成 1000ms+ 卡顿。
+            // 因此必须确保目标坐标周围 3x3 的区块全部 loaded，防止抖动越界。
+            int cx = pos.getX() >> 4;
+            int cz = pos.getZ() >> 4;
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (!world.isChunkLoaded(cx + dx, cz + dz)) return 0;
+                }
+            }
             RegistryEntry<Biome> biomeEntry = world.getBiome(pos);
             return computeAffinity(biomeEntry, resource);
         } catch (Throwable t) {
@@ -56,7 +62,13 @@ public final class BiomePrior {
      */
     public static int getAffinityAt(ServerWorld world, int tx, int tz, int ty, ResourceType resource) {
         try {
-            if (!world.isChunkLoaded(tx >> 4, tz >> 4)) return 0;
+            int cx = tx >> 4;
+            int cz = tz >> 4;
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (!world.isChunkLoaded(cx + dx, cz + dz)) return 0;
+                }
+            }
             RegistryEntry<Biome> biomeEntry = world.getBiome(new BlockPos(tx, ty, tz));
             return computeAffinity(biomeEntry, resource);
         } catch (Throwable t) {
