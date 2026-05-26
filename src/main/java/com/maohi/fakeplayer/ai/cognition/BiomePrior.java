@@ -38,7 +38,12 @@ public final class BiomePrior {
     public static int getAffinity(ServerPlayerEntity player, ResourceType resource) {
         try {
             ServerWorld world = player.getEntityWorld();
-            RegistryEntry<Biome> biomeEntry = world.getBiome(player.getBlockPos());
+            BlockPos pos = player.getBlockPos();
+            // V5.59: chunk-ready 守卫 — getBiome 内部走 getChunk(FULL,true),在 chunk gen 未完成时
+            //   park 主线程(watchdog 抓到 BiomePrior:41 卡 1170ms)。未就绪降级返回 0(中立),
+            //   下一 tick 区块就绪后自然恢复正常判断,功能 0 损失。
+            if (!world.isChunkLoaded(pos.getX() >> 4, pos.getZ() >> 4)) return 0;
+            RegistryEntry<Biome> biomeEntry = world.getBiome(pos);
             return computeAffinity(biomeEntry, resource);
         } catch (Throwable t) {
             return 0; // chunk 未加载或 API 异常，返回中立
