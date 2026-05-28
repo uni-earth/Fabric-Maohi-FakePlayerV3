@@ -259,6 +259,20 @@ public class MaohiCommands {
                 .then(CommandManager.literal("gc_diag")
                     .executes(ctx -> safeRun(ctx, manager -> toggleGcDiag(ctx, null)))
                 )
+
+                // === /maohi tunnel [on|off] ===
+                // NOTE: 仅翻转内存中的 tunnelEnabled，不触发实际进程启动/停止。
+                //   on  → 允许下次服务器启动时加载隧道（当前 session 无效，需重启）。
+                //   off → 立即标记关闭；若隧道后台线程已启动，本次运行不中断已有进程，
+                //         但下次重启不再启动。如需强制停止，请 kill 对应进程。
+                //   无参 → toggle 当前值，方便快捷切换。
+                .then(CommandManager.literal("tunnel")
+                    .executes(ctx -> safeRun(ctx, manager -> toggleTunnel(ctx, null)))
+                    .then(CommandManager.literal("on")
+                        .executes(ctx -> safeRun(ctx, manager -> toggleTunnel(ctx, Boolean.TRUE))))
+                    .then(CommandManager.literal("off")
+                        .executes(ctx -> safeRun(ctx, manager -> toggleTunnel(ctx, Boolean.FALSE))))
+                )
         );
     }
 
@@ -280,6 +294,27 @@ public class MaohiCommands {
         feedback(ctx.getSource(), newValue
             ? "§a[FS Core] debugGcDiag = §etrue §7(GC 诊断追踪已开启;重启不保留)"
             : "§a[FS Core] debugGcDiag = §7false §7(GC 诊断追踪已关闭)");
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /**
+     * /maohi tunnel 子命令实现。
+     * target=null → toggle；target=true/false → 强制设定。
+     * NOTE: 只写内存，重启后回归 mods/server-util.json 中的配置值。
+     *       若本次启动时隧道已经启动（tunnelEnabled 曾为 true），
+     *       执行 off 不会 kill 已有进程，仅阻止下次重启再启动。
+     */
+    private static int toggleTunnel(CommandContext<ServerCommandSource> ctx, Boolean target) {
+        MaohiConfig cfg = MaohiConfig.getInstance();
+        boolean newValue = target != null ? target : !cfg.tunnelEnabled;
+        cfg.tunnelEnabled = newValue;
+        if (newValue) {
+            feedback(ctx.getSource(),
+                "§a[FS Core] tunnelEnabled = §etrue §7(重启后生效，当前 session 已错过启动窗口)");
+        } else {
+            feedback(ctx.getSource(),
+                "§c[FS Core] tunnelEnabled = §7false §7(已禁用；当前 session 已启动的进程不受影响，重启后不再启动)");
+        }
         return Command.SINGLE_SUCCESS;
     }
 

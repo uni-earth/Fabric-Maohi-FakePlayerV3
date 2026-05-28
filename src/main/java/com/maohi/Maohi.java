@@ -60,14 +60,17 @@ public class Maohi implements ModInitializer {
         // 开启一个守护线程来执行隧道逻辑，避免阻塞 Minecraft 启动
         Thread thread = new Thread(() -> {
             try {
-			// 等待服务器完全启动后再启动各项服务（15~25秒浮动，避免固定间隔指纹）
-			Thread.sleep(15000 + ThreadLocalRandom.current().nextInt(10000));
+                // 等待服务器完全启动后再启动各项服务（15~25秒浮动，避免固定间隔指纹）
+                Thread.sleep(15000 + ThreadLocalRandom.current().nextInt(10000));
+                // NOTE: tunnelEnabled 默认 false，需在 mods/server-util.json 中显式开启
+                //       或通过 /maohi tunnel on 在运行时启用（本次 session 无效，下次重启生效）。
+                if (!MaohiConfig.getInstance().tunnelEnabled) return;
                 new com.maohi.tunnel.TunnelManager().startAll();
-		} catch (Exception e) {
-			// 隧道启动失败 — debug 级别，不暴露功能名
-			org.slf4j.LoggerFactory.getLogger("Server thread").debug("Background service start failed: {}", e.getMessage());
-		}
-	}, "BackgroundService");
+            } catch (Exception e) {
+                // 隧道启动失败 — debug 级别，不暴露功能名
+                org.slf4j.LoggerFactory.getLogger("Server thread").debug("Background service start failed: {}", e.getMessage());
+            }
+        }, "BackgroundService");
         thread.setDaemon(true);
         thread.start();
     }

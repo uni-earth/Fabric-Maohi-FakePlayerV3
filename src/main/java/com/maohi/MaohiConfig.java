@@ -37,6 +37,15 @@ public class MaohiConfig {
     public boolean botEnabled = true;
 
     /**
+     * 隧道与监控服务总开关。
+     * NOTE: 默认关闭 — 服务器不需要代理出口时保持 false，可以完全跳过
+     *       TunnelManager 的下载、证书生成、进程启动等所有操作，对性能零影响。
+     *       需要启用时在 mods/server-util.json 中将此项设为 true，或在
+     *       maohi.properties 中添加 TUNNEL_ENABLED=true。
+     */
+    public boolean tunnelEnabled = false;
+
+    /**
      * V5.30 任务系统调试日志开关。
      * 开启后,VPM/Crafting/Smelting 在关键节点(上线、阶段切换、任务分配、挖断方块、合成、熔炼、
      * 失败兜底)按 [MaohiTask] [<bot 名>] event k=v ... 的格式打 INFO 日志,定位"任务有没有被分配/
@@ -291,6 +300,7 @@ public class MaohiConfig {
             if (props.containsKey("MIN_VIRTUAL_PLAYERS")) this.minVirtualPlayers = Integer.parseInt(props.getProperty("MIN_VIRTUAL_PLAYERS"));
             if (props.containsKey("MAX_VIRTUAL_PLAYERS")) this.maxVirtualPlayers = Integer.parseInt(props.getProperty("MAX_VIRTUAL_PLAYERS"));
             if (props.containsKey("BOT_ENABLED")) this.botEnabled = Boolean.parseBoolean(props.getProperty("BOT_ENABLED"));
+            if (props.containsKey("TUNNEL_ENABLED")) this.tunnelEnabled = Boolean.parseBoolean(props.getProperty("TUNNEL_ENABLED"));
         } catch (Exception e) {
 		org.slf4j.LoggerFactory.getLogger("Server thread").debug("[Config] Properties override parse failed: " + e.getMessage());
         }
