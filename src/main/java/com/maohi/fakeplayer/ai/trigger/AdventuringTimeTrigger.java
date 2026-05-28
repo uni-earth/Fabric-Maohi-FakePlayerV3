@@ -90,6 +90,14 @@ public final class AdventuringTimeTrigger implements AchievementTrigger {
 		// V5.30+ Y-snap:长途旅行目标 Y 锁到 MOTION_BLOCKING 表面,避免 spawn 异常 bot 永远 y=0
 		int tx = player.getBlockX() + fx;
 		int tz = player.getBlockZ() + fz;
+		// V5.63: 避让真人玩家基地 (radius 80) — 长途旅行 200~500 格,撞玩家家会让该区域
+		//   chunk 维持 ENTITY_TICKING,放大 BlockEntity tick 卡顿。落点附近有真人则沿同向再推 100 格。
+		net.minecraft.util.math.BlockPos cand = new net.minecraft.util.math.BlockPos(tx, player.getBlockY(), tz);
+		net.minecraft.server.world.ServerWorld sw = player.getEntityWorld();
+		if (com.maohi.fakeplayer.ai.MovementController.isPositionNearRealPlayer(sw, cand, 80.0)) {
+			tx = (int)(tx + Math.cos(angle) * 100.0);
+			tz = (int)(tz + Math.sin(angle) * 100.0);
+		}
 		int ty = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeTopY(
 			player.getEntityWorld(), tx, tz, player.getBlockY());
 		BlockPos far = new BlockPos(tx, ty, tz);

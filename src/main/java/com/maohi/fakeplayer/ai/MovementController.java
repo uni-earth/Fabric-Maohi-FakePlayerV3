@@ -951,6 +951,31 @@ public class MovementController {
 	}
 
 	/**
+	 * V5.63: 判断给定坐标是否落在任何真人玩家(非 fakeplayer)的半径 radius 范围内。
+	 *
+	 * <p>用途: bot 探索/远征/长途旅行的目标采样时避让真人基地区域,降低 bot 进入
+	 * BlockEntity 密集区(hopper/chest/furnace 农场)的概率 — vanilla BlockEntity tick
+	 * 在跨 chunk 边界查询时常触发同步 chunk 加载(stall_dump 反复抓到 class_2586.markDirty
+	 * → getBlockState → park),mod 层降低 bot 在这种区域逗留可显著缓解。
+	 *
+	 * @param world  目标所在世界
+	 * @param pos    候选目标坐标
+	 * @param radius 避让半径(典型 80 格,覆盖玩家家附近 ~5x5 chunk)
+	 * @return true = 该坐标距离至少一个真人玩家 < radius,采样方应换一个候选
+	 */
+	public static boolean isPositionNearRealPlayer(ServerWorld world, net.minecraft.util.math.BlockPos pos, double radius) {
+		if (world == null || world.getServer() == null) return false;
+		com.maohi.fakeplayer.VirtualPlayerManager mgr = com.maohi.Maohi.getVirtualPlayerManager();
+		double radiusSq = radius * radius;
+		for (ServerPlayerEntity other : world.getServer().getPlayerManager().getPlayerList()) {
+			if (mgr != null && mgr.isVirtualPlayer(other.getUuid())) continue;
+			if (other.getEntityWorld() != world) continue;
+			if (other.getBlockPos().getSquaredDistance(pos) < radiusSq) return true;
+		}
+		return false;
+	}
+
+	/**
 	 * P23-A: Nudge Teleport 的安全落点搜索。
 	 */
 	private static BlockPos findNudgePosition(ServerWorld world, BlockPos current, int radius) {

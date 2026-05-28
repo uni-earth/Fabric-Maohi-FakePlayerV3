@@ -616,6 +616,15 @@ public final class PhaseStoneAge implements Phase {
             if (com.maohi.fakeplayer.ai.PathfindingNavigation.isDangerAhead(
                     player.getEntityWorld(), firstStep)) continue;
 
+            // V5.63: 避让真人玩家基地 (radius 80 = ~5x5 chunk)。
+            //   动机: vanilla BlockEntity tick (hopper/chest/furnace) 跨 chunk 查询触发主线程
+            //   同步加载 chunk → 长 stall。bot 进入玩家家附近会让该批 chunk 维持 ENTITY_TICKING,
+            //   放大 BE tick 频率。避让让玩家家附近 chunk 趋于 INACCESSIBLE,BE tick 跳过。
+            //   只过滤"远征目标"(本函数采的是 EXPLORING 远端落点),不影响近距离 task 朝玩家方向移动。
+            BlockPos candPos = new BlockPos(tx, player.getBlockY(), tz);
+            if (com.maohi.fakeplayer.ai.MovementController.isPositionNearRealPlayer(
+                    player.getEntityWorld(), candPos, 80.0)) continue;
+
             candidates[validCount][0] = tx;
             candidates[validCount][1] = tz;
             validCount++;

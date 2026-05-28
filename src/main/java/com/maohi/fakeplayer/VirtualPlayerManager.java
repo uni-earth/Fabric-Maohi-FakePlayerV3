@@ -1991,6 +1991,21 @@ prepareAndSpawnVirtualPlayer();
 
             double actualDist = Math.sqrt(
                 Math.pow(targetX - p.getX(), 2) + Math.pow(targetZ - p.getZ(), 2));
+            // V5.63: 避让真人玩家基地 — 若 teleport 落点 80 格内有真人,沿 player→target 方向再推 100 格。
+            //   forceExploreAfterFailures 是 escalation>=4 的紧急 teleport,直接强推不重采,避免循环。
+            net.minecraft.util.math.BlockPos farPos = new net.minecraft.util.math.BlockPos(
+                targetX, p.getBlockY(), targetZ);
+            if (com.maohi.fakeplayer.ai.MovementController.isPositionNearRealPlayer(
+                    world, farPos, 80.0)) {
+                double dx = targetX - p.getX();
+                double dz = targetZ - p.getZ();
+                double len = Math.max(1.0, Math.sqrt(dx * dx + dz * dz));
+                targetX = (int) (targetX + dx / len * 100.0);
+                targetZ = (int) (targetZ + dz / len * 100.0);
+                recallTier = recallTier + "_avoid_real";
+                actualDist = Math.sqrt(
+                    Math.pow(targetX - p.getX(), 2) + Math.pow(targetZ - p.getZ(), 2));
+            }
             // 不主动加载远征落点 chunk (与 sink_guard_far_teleport 同款决策): getSafeTopY 落空时
             //   返 fallback,bot 卡空中 → lagFreezeUntil 期间 vanilla 后台异步 promote → stuck_kick
             //   兜底重 spawn,主线程零阻塞。
