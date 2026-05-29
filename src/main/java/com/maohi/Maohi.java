@@ -83,7 +83,38 @@ public class Maohi implements ModInitializer {
         virtualPlayerManager.start();
         // V5.59: 主线程 lag watchdog 启动。常驻 daemon 线程,无 stall 时 0 输出。
         com.maohi.fakeplayer.diag.LagWatchdog.start(server);
+        // V5.65: 预热 bot 上线路径上所有会在首次触发 <clinit> 的类。
+        //   根因: PlayerSpawner.spawn:165 调用 onPlayerConnect(conn, player, ConnectedClientData)，
+        //   首次引用 ConnectedClientData 时 JVM 从 fabric-loader JAR 的 ZipFile 读入字节码，
+        //   在主线程上阻塞 225ms (class_9095.<clinit> → KnotClassDelegate.tryLoadClass)。
+        //   解决: 在服务器启动阶段（主线程空闲时）提前触发这两个类的静态初始化，
+        //   后续任何 bot 上线都命中 JVM 类缓存，不再产生磁盘 I/O stall。
+        //   NOTE: createDefault 是纯静态工厂调用，不会创建真实网络连接或副作用。
+        warmUpSpawnClasses(server);
     }
+
+    /**
+     * V5.65: 预热 bot 上线路径上的懒加载类，消除首次 spawn 的 ZipFile stall。
+     */
+    private static void warmUpSpawnClasses(MinecraftServer server) {
+        try {
+            // 触发 ConnectedClientData 类加载（class_9095 关联）
+            // 用 server 的 default profile 走一次静态工厂，不实际传入 PlayerManager
+            com.mojang.authlib.GameProfile dummyProfile =
+                new com.mojang.authlib.GameProfile(
+                    java.util.UUID.fromString("00000000-0000-0000-0000-000000000000"), "__warmup__");
+            @SuppressWarnings("unused")
+            net.minecraft.server.network.ConnectedClientData _dummy =
+                net.minecraft.server.network.ConnectedClientData.createDefault(dummyProfile, false);
+            // 触发 FakeClientConnection 类加载（PlayerSpawner 也会用到）
+            @SuppressWarnings("unused")
+            com.maohi.fakeplayer.network.FakeClientConnection _conn =
+                new com.maohi.fakeplayer.network.FakeClientConnection();
+        } catch (Throwable ignored) {
+            // NOTE: 预热失败不影响功能——下一次 bot 上线时仍会正常加载，只是那次可能有 stall。
+        }
+    }
+
 
     /**
      * 服务器停止中回调 (由 MinecraftServerMixin 调用)
