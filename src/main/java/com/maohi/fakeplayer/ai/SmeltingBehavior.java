@@ -8,6 +8,7 @@ import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.registry.tag.ItemTags;
 import net.minecraft.screen.FurnaceScreenHandler;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -47,8 +48,11 @@ public final class SmeltingBehavior {
 
 	private SmeltingBehavior() {} // 工具类
 
-	/** 熔炉扫描半径,与 EnchantItemTrigger / CraftingBehavior 同思路 */
-	private static final int FURNACE_SCAN_RADIUS = 6;
+	/** NOTE: V5.80 将搜扣半径从 6 扩大到 24 格。
+	 *   原 6 格不够：假人放下燃炉后承接挖矿/砍树去了，回来时距炬特远超过 6 格导致
+	 *   autoSmeltOres 永远找不到炬炉， raw_iron 堆山去也炼不了。
+	 *   24 格 内进行层层扫描，匹配 PhaseIronAge 的 FURNACE_NEAR_SQ(12格)阈値。 */
+	private static final int FURNACE_SCAN_RADIUS = 24;
 	/** 阶段 2 重开熔炉的最大距离平方(5 格内,服务端 reach 5.5) */
 	private static final double COLLECT_DIST_SQ = 25.0;
 
@@ -62,7 +66,10 @@ public final class SmeltingBehavior {
 		if (pers.smeltingTicks > 0) return;             // 已在阶段 2 等待
 		if (pers.smeltingFurnacePos != null) return;    // 阶段 1 已执行待 collect
 		if (pers.currentTask == com.maohi.fakeplayer.TaskType.CRAFTING) return; // 与合成串行
-		if (ThreadLocalRandom.current().nextInt(500) != 0) return;
+		// V5.83: 节流从 1/500 降到 1/40 —— 旧值批次间隔 ~25s，叠加 200tick 熔炼 → ~35s/锭，
+		//   整套铁甲 24 锭要 ~14 分钟。1/40 后批次间隔 ~2s，~12s/锭（贴近 vanilla 10s/锭下限），
+		//   整套铁甲 ~5 分钟。smeltingTicks/CRAFTING 守卫仍保证不洪泛、不超 vanilla 熔炼速度。
+		if (ThreadLocalRandom.current().nextInt(40) != 0) return;
 
 		PlayerInventory inv = player.getInventory();
 		int rawIronSlot = findItemSlot(inv, Items.RAW_IRON);
@@ -70,10 +77,25 @@ public final class SmeltingBehavior {
 		int fuelSlot = findFuelSlot(inv);
 		if (fuelSlot < 0) return;
 
-		BlockPos furnace = findFurnace(player, FURNACE_SCAN_RADIUS);
-		if (furnace == null) return;
+		// V5.83: 优先用记忆熔炉坐标，避免现在 1/40 高频下每次都做 24³ 全量扫描（主线程开销）。
+		//   记忆存在且已在熔炼范围(5格)内 → 直接用；否则才扫一次来发现/更新并回写。
+		BlockPos furnace = pers.knownFurnacePos;
+		// V5.83: 贴炉(≤5格,区块必加载，调 isFurnaceBlock 安全不会 park)时校验记忆坐标仍是熔炉；
+		//   失效则清掉，避免对幽灵炉反复空驻留 / smelt_fail。远距离不校验（绝不读未加载区块）。
+		if (furnace != null
+				&& player.squaredDistanceTo(Vec3d.ofCenter(furnace)) <= COLLECT_DIST_SQ
+				&& !isFurnaceBlock(player.getEntityWorld(), furnace)) {
+			pers.knownFurnacePos = null;
+			furnace = null;
+		}
+		if (furnace == null
+				|| player.squaredDistanceTo(Vec3d.ofCenter(furnace)) > COLLECT_DIST_SQ) {
+			furnace = findFurnace(player, FURNACE_SCAN_RADIUS);
+			if (furnace == null) return;
+			pers.knownFurnacePos = furnace;
+		}
 
-		// 距离检查 — autoSmeltOres 触发频率低,贴近熔炉时再启动
+		// 距离检查 — 只有真正贴炉(≤5格)才启动熔炼
 		if (player.squaredDistanceTo(Vec3d.ofCenter(furnace)) > COLLECT_DIST_SQ) return;
 
 		// 真协议化阶段 1: 开熔炉 → 摆 1 raw_iron + 1 fuel → 关
@@ -215,18 +237,32 @@ public final class SmeltingBehavior {
 		return -1;
 	}
 
-	/** 找第一个可烧炼燃料槽位(煤/木炭/各种木类) */
+	/**
+	 * V5.86: 燃料口径的单一真源 —— autoSmeltOres 摆料 与 各 Phase 的"有燃料?"前置判定都走这里,
+	 *   杜绝两侧口径不一致(否则 Phase 用宽口径判"有燃料"驱去贴炉、autoSmeltOres 用窄口径判"无燃料"
+	 *   → 反复 park 空转)。接受任意原木/木板(tag,vanilla 燃料,burn 300t)+ 煤/木炭(burn 1600t)。
+	 *   旧版只认 oak/birch/spruce 原木 + oak 木板,jungle/dark_oak 等会被漏判。
+	 */
+	private static boolean isFuel(ItemStack stack) {
+		if (stack.isEmpty()) return false;
+		return stack.isIn(ItemTags.LOGS) || stack.isIn(ItemTags.PLANKS)
+			|| stack.isOf(Items.COAL) || stack.isOf(Items.CHARCOAL);
+	}
+
+	/** 找第一个可烧炼燃料槽位(煤/木炭/任意原木/任意木板) */
 	private static int findFuelSlot(PlayerInventory inv) {
 		for (int i = 0; i < inv.size(); i++) {
-			ItemStack stack = inv.getStack(i);
-			if (stack.isEmpty()) continue;
-			if (stack.isOf(Items.COAL) || stack.isOf(Items.CHARCOAL)
-				|| stack.isOf(Items.OAK_LOG) || stack.isOf(Items.BIRCH_LOG)
-				|| stack.isOf(Items.SPRUCE_LOG) || stack.isOf(Items.OAK_PLANKS)) {
-				return i;
-			}
+			if (isFuel(inv.getStack(i))) return i;
 		}
 		return -1;
+	}
+
+	/**
+	 * V5.86: 背包是否有任何可用熔炼燃料。供 PhaseStoneAge SA-P0 / PhaseIronAge 冶炼前置判定使用。
+	 *   与 findFuelSlot 同口径 → "判定有燃料" 必然等于 "autoSmeltOres 真能摆进燃料槽",不会打架。
+	 */
+	public static boolean hasSmeltFuel(ServerPlayerEntity player) {
+		return findFuelSlot(player.getInventory()) >= 0;
 	}
 
 	private static boolean isFurnaceBlock(ServerWorld world, BlockPos pos) {

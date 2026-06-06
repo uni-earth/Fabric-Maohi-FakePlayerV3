@@ -28,6 +28,10 @@ public class Personality {
 
 	// V5.5 拟真加固：成长阶段追踪
 	public transient com.maohi.fakeplayer.ai.phase.PhaseStoneAge.SubPhase stripMineState = null;
+	// V5.84: strip-mine 目标矿物。false=铁(石器时代下挖到 Y15 拿铁),true=钻石(铁器时代下挖到 Y-54 拿钻)。
+	//   同一套 StripMineBehavior 状态机据此切换目标 Y / 收手条件(got_iron vs got_diamond) / 镐前置(任意镐 vs 铁镐+)。
+	//   transient:每次发起 strip-mine 时由发起方(PhaseStoneAge=false / PhaseIronAge=true)显式置位。
+	public transient boolean stripMineForDiamond = false;
 	public transient BlockPos stripMineStartPos = null;
 	public transient int stripMineStartY = 64;
 	public int stoneStableCyclesNoIron = 0;
@@ -418,6 +422,12 @@ public class Personality {
 	public BlockPos furnacePlaceSupportPos = null;
 	public long furnacePlaceAtTick = 0L;
 	public long furnaceRestoreAtTick = 0L;
+
+	// NOTE: 已知营地设施坐标——假人放置/找到熔炉或工作台后写入，IRON_AGE 回营时优先复用，
+	//   省去每次扫描的开销并解决"野外无法找回自己放过的炉子"问题。
+	//   transient：不持久化，下次登录重新发现（地图可能被改动）。
+	public transient BlockPos knownFurnacePos = null;    // 最近一次确认存在的熔炉坐标
+	public transient BlockPos knownWorkbenchPos = null;  // 最近一次确认存在的工作台坐标
 
 	// V5.23 聊天近期去重:VocabularyBank 选词时拒绝最近 5 条已说过的台词,
 	// 避免假人短时间内重复说同一句"rain rain go away"等。

@@ -74,6 +74,18 @@ public final class PhaseDiamondAge implements Phase {
         }
 
         // ============================================================
+        // 优先级 1.5 (V5.84.1): 主动合钻镐(进下界硬前置)/钻甲 —— 明确去工作台,不靠碰巧路过
+        //   钻镐是黑曜石(→下界门)的硬前置;此前 DIAMOND_AGE 无任何回台合装备的驱动,假人在矿层攒够钻
+        //   却到不了工作台 → 钻镐/钻甲永远合不出 → 卡死。这里在"下界门就绪"之后、"挖黑曜石"之前主动驱动:
+        //   有料(钻镐:3钻+2棍 / 钻甲:够数)就先回台/就地建台合,合完再继续挖黑曜石。钻镐先于钻甲由 VPM
+        //   调用顺序(autoUpgradeTools 先于 autoCraftArmor)保证。
+        // ============================================================
+        if (com.maohi.fakeplayer.ai.CraftingBehavior.hasPendingDiamondGearCraft(player)
+                && driveToCraftDiamondGear(player, personality, world, inv, ctx)) {
+            return;
+        }
+
+        // ============================================================
         // 优先级 2: 黑曜石不足 → 矿层找黑曜石/岩浆 (高确定性目标,30%)
         // ============================================================
         if (inv.obsidian < 10 && rng().nextInt(100) < 50) {
@@ -166,6 +178,7 @@ public final class PhaseDiamondAge implements Phase {
                   || it == Items.DIAMOND_AXE || it == Items.DIAMOND_SHOVEL) d.diamondTools++;
             else if (it == Items.DIAMOND_HELMET || it == Items.DIAMOND_CHESTPLATE
                   || it == Items.DIAMOND_LEGGINGS || it == Items.DIAMOND_BOOTS) d.diamondArmor++;
+            else if (it == Items.CRAFTING_TABLE) d.hasCraftingTableItem = true; // V5.84.1: 就地建台用
         }
         return d;
     }
@@ -175,6 +188,7 @@ public final class PhaseDiamondAge implements Phase {
         int enderPearls = 0;
         int diamondTools = 0;
         int diamondArmor = 0;
+        boolean hasCraftingTableItem = false; // V5.84.1: 背包是否有工作台 item(就地放台用)
 
         boolean hasFullDiamondGear() {
             return diamondTools + diamondArmor >= DIAMOND_GEAR_SUFFICIENT;
@@ -206,6 +220,106 @@ public final class PhaseDiamondAge implements Phase {
         int z = player.getBlockZ() + dz;
         int y = PathfindingNavigation.getSafeTopY(world, x, z, player.getBlockY());
         return new BlockPos(x, y, z);
+    }
+
+    /**
+     * V5.84.1: 主动驱动假人去工作台合钻镐(进下界硬前置)/钻甲 —— 明确主动,不靠碰巧路过。
+     *   找台顺序:已知台(校验仍在) → 附近 12 格扫(命中即共享上报) → 共享地图查询(不 claim,共用)。
+     *   找到台:≤6 格(WORKBENCH_NEARBY_SQ)驻留让 autoUpgradeTools/autoCraftArmor 合;6~64 格走回去;
+     *   >64 格(深井距地表台太远、寻路不可靠)落到就地建台。一直没台 → ensureOwnTable 就地造+放(approach A)。
+     *   @return true = 已接管本次任务分配(调用方应 return)。
+     */
+    private static boolean driveToCraftDiamondGear(ServerPlayerEntity player, Personality personality,
+                                                   ServerWorld world, InventoryDigest inv, PhaseContext ctx) {
+        // 正在合成 → 不打断(就地建台/砍树兜底可能覆盖 CRAFTING),等它合完下轮再评估
+        if (personality.currentTask == TaskType.CRAFTING) return true;
+        BlockPos pos = player.getBlockPos();
+        final double FAR_TABLE_SQ = 64.0 * 64.0; // 超此距离不长途回走,改就地放
+
+        // 1A: 校验已知工作台仍在(扫 1 格)
+        BlockPos bench = null;
+        if (personality.knownWorkbenchPos != null
+                && PhaseIronAge.findCraftingTable(world, personality.knownWorkbenchPos, 1) != null) {
+            bench = personality.knownWorkbenchPos;
+        }
+        // 1B: 附近 12 格扫一张现成的(命中即记忆 + 共享上报,让别的假人也能用)
+        if (bench == null) {
+            BlockPos found = PhaseIronAge.findCraftingTable(world, pos, 12);
+            if (found != null) {
+                personality.knownWorkbenchPos = found;
+                bench = found;
+                com.maohi.fakeplayer.ai.cognition.SharedResourceMap.getInstance().report(
+                    com.maohi.fakeplayer.ai.cognition.SharedResourceMap.LandmarkType.CRAFTING_TABLE,
+                    found, player.getUuid());
+            }
+        }
+        // 2: 有可达台 → 驻留 / 回走
+        if (bench != null) {
+            double distSq = pos.getSquaredDistance(bench);
+            if (distSq <= PhaseStoneAge.WORKBENCH_NEARBY_SQ) {
+                PhaseStoneAge.setIdle(personality, player, 100);
+                com.maohi.fakeplayer.TaskLogger.log(player, "diamond_gear_craft", "action", "park", "bench", bench);
+                return true;
+            }
+            if (distSq <= FAR_TABLE_SQ) {
+                setReturnToBase(personality, player, bench);
+                com.maohi.fakeplayer.TaskLogger.log(player, "diamond_gear_craft",
+                    "action", "return", "bench", bench, "distSq", (int) distSq);
+                return true;
+            }
+            // 太远 → 落到就地放(不长途回走)
+        }
+        // 1C: 没有近台 → 查共享地图(不 claim,共用);仅当节点也在合理距离内才去
+        if (bench == null
+                && com.maohi.fakeplayer.ai.cognition.SharedResourceMap.shouldQueryThisTick(
+                    player.getEntityWorld().getServer().getTicks(),
+                    personality.triggerPhaseSeed, personality.taskFailCount)) {
+            com.maohi.fakeplayer.ai.cognition.SharedResourceMap.LandmarkNode node =
+                com.maohi.fakeplayer.ai.cognition.SharedResourceMap.getInstance().queryNearest(
+                    pos, player.getUuid(),
+                    com.maohi.fakeplayer.ai.cognition.SharedResourceMap.LandmarkType.CRAFTING_TABLE);
+            if (node != null && pos.getSquaredDistance(node.approxPos) <= FAR_TABLE_SQ) {
+                set(personality, player, TaskType.EXPLORING, node.approxPos, TimingConstants.TICK_TIMEOUT_EXPLORE * 2);
+                com.maohi.fakeplayer.TaskLogger.log(player, "diamond_gear_craft",
+                    "action", "goto_shared", "approx", node.approxPos);
+                return true;
+            }
+        }
+        // 3: 无可达台 → 就地造+放(approach A)
+        return ensureOwnTable(player, personality, world, inv, ctx);
+    }
+
+    /**
+     * V5.84.1: approach A —— 就地建台。有台 item → 驻留让 BlockPlacer.tryPlaceCraftingTable 落在脚边
+     *   (IDLE 不移动,落地后 6 格内 autoUpgradeTools/autoCraftArmor 即合);无台 item → craftCraftingTableOnly
+     *   合一张(log→plank→table,背包 2×2);料不够 → 砍树补木。落台坐标由 BlockPlacer 钩子记忆 + 共享。
+     */
+    private static boolean ensureOwnTable(ServerPlayerEntity player, Personality personality,
+                                          ServerWorld world, InventoryDigest inv, PhaseContext ctx) {
+        if (inv.hasCraftingTableItem) {
+            PhaseStoneAge.setIdle(personality, player, 100);
+            com.maohi.fakeplayer.TaskLogger.log(player, "diamond_gear_craft", "action", "place_own_table");
+            return true;
+        }
+        if (com.maohi.fakeplayer.ai.CraftingBehavior.craftCraftingTableOnly(player)) {
+            // 已进入 CRAFTING(合 plank 或 table) —— craftingTarget 已设,这里不覆盖
+            return true;
+        }
+        // 料不够(无 log 无 4 plank) → 砍树补木
+        BlockPos logTarget = ctx.findLog.apply(world, player.getBlockPos());
+        if (logTarget != null) {
+            set(personality, player, TaskType.WOODCUTTING, logTarget, TimingConstants.TICK_TIMEOUT_WORK);
+        } else {
+            set(personality, player, TaskType.EXPLORING, surfacePoint(world, player, 80), TimingConstants.TICK_TIMEOUT_EXPLORE);
+        }
+        com.maohi.fakeplayer.TaskLogger.log(player, "diamond_gear_craft", "action", "gather_wood_for_table");
+        return true;
+    }
+
+    private static void setReturnToBase(Personality p, ServerPlayerEntity player, BlockPos target) {
+        p.currentTask = TaskType.RETURN_TO_BASE;
+        p.taskTarget = target;
+        p.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE * 2;
     }
 
     private static void set(Personality p, ServerPlayerEntity player, TaskType type, BlockPos target, int timeoutTicks) {

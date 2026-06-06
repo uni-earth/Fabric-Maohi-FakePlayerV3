@@ -2133,6 +2133,13 @@ prepareAndSpawnVirtualPlayer();
     }
 
     private void assignRandomTask(ServerPlayerEntity player, Personality personality) {
+        // V5.84: strip-mine 激活时不重评估任务 —— strip-mine 由 tickWorldInteraction(StripMineBehavior.tick)
+        //   独立驱动(按 stripMineState,不分阶段)。若放任 assignRandomTask 跑,会反复 detectPhase + 派发
+        //   PhaseXxx.assignTask,可能重置 stripMineStartY/tunnelLen 破坏 ascend/max_len,并刷无用日志。
+        //   一处守卫覆盖全部调用点(周期强制 reassign + 任务到期 reassign)。strip-mine 自带完整 abort
+        //   (got_iron/got_diamond/low_hp/low_durability/max_len/blocked_layer),结束后 stripMineState=null
+        //   → 本守卫放行 → 正常派发(此时若已挖到钻石,detectPhase 即升 DIAMOND_AGE → PhaseDiamondAge)。
+        if (com.maohi.fakeplayer.ai.StripMineBehavior.isActive(personality)) return;
         GrowthPhase phase = detectPhase(player);
         // V5.30 调试:阶段切换时打一次日志,稳态 tick 不重复
         if (com.maohi.fakeplayer.TaskLogger.enabled() && phase != personality.lastLoggedPhase) {
@@ -2331,17 +2338,37 @@ prepareAndSpawnVirtualPlayer();
             net.minecraft.item.ItemStack stack = inv.getStack(i);
             if (stack.isEmpty()) continue;
             String id = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).getPath();
-            if (id.startsWith("netherite_")) hasNetherite = true;
-            else if (id.startsWith("diamond_") || id.equals("diamond")) hasDiamond = true;
-            else if (id.startsWith("iron_") || id.equals("iron_ingot") || id.equals("raw_iron")) hasIron = true;
-            else if (id.equals("stone_pickaxe")) hasStonePickaxe = true;
-            else if (id.equals("wooden_pickaxe")) hasWoodenPickaxe = true;
+            if (id.startsWith("netherite_")) { hasNetherite = true; continue; }
+            if (id.startsWith("diamond_") || id.equals("diamond")) { hasDiamond = true; continue; }
+            // NOTE: V5.80 修正 — raw_iron / iron_ore 不触发 IRON_AGE。
+            //   旧逻辑 id.startsWith("iron_") 会命中 raw_iron、iron_ore 等，导致假人背包塞满未冶炼矿石
+            //   就被推进 IRON_AGE，但实际没有熔炉/铁锭，工具链无法推进，造成数小时空转卡死。
+            //   新逻辑：只有 iron_ingot（已冶炼）或铁制工具/盔甲（已使用铁锭合成）才算真正进入铁器时代。
+            if (id.equals("iron_ingot")) { hasIron = true; continue; }
+            if (id.startsWith("iron_") && (id.endsWith("_pickaxe") || id.endsWith("_sword")
+                    || id.endsWith("_axe")   || id.endsWith("_shovel") || id.endsWith("_hoe")
+                    || id.endsWith("_helmet") || id.endsWith("_chestplate")
+                    || id.endsWith("_leggings") || id.endsWith("_boots"))) {
+                hasIron = true; continue;
+            }
+            // raw_iron / iron_ore / iron_nugget 等原材料不触发 IRON_AGE，让假人在石器时代完成冶炼前置
+            if (id.equals("stone_pickaxe")) { hasStonePickaxe = true; continue; }
+            if (id.equals("wooden_pickaxe")) { hasWoodenPickaxe = true; continue; }
         }
-        if (hasNetherite) return GrowthPhase.NETHER;        // 下界合金 → 已远征下界
-        if (hasDiamond)   return GrowthPhase.DIAMOND_AGE;   // 有钻石（任何来源，与 vanilla 一致）
-        if (hasIron)      return GrowthPhase.IRON_AGE;      // 有铁
-        if (hasWoodenPickaxe || hasStonePickaxe) return GrowthPhase.STONE_AGE; // V5.44: 任何石/木镐 → 石器时代
-        return GrowthPhase.WOOD_AGE;                        // V5.44: 无任何镐 → 木器时代起点
+        // 同时检查装备槽中的铁器（假人可能已穿上铁甲但背包无铁锭）
+        for (net.minecraft.entity.EquipmentSlot slot : net.minecraft.entity.EquipmentSlot.values()) {
+            net.minecraft.item.ItemStack equipped = player.getEquippedStack(slot);
+            if (equipped.isEmpty()) continue;
+            String eid = net.minecraft.registry.Registries.ITEM.getId(equipped.getItem()).getPath();
+            if (eid.startsWith("netherite_")) { hasNetherite = true; break; }
+            if (eid.startsWith("diamond_"))  { hasDiamond   = true; break; }
+            if (eid.startsWith("iron_") && !eid.equals("iron_ingot")) { hasIron = true; break; }
+        }
+        if (hasNetherite) return GrowthPhase.NETHER;      // 下界合金 → 已远征下界
+        if (hasDiamond)   return GrowthPhase.DIAMOND_AGE; // 有钻石
+        if (hasIron)      return GrowthPhase.IRON_AGE;    // 有铁锭或已装备铁器
+        if (hasWoodenPickaxe || hasStonePickaxe) return GrowthPhase.STONE_AGE;
+        return GrowthPhase.WOOD_AGE;
     }
 
     /** 
@@ -2393,7 +2420,12 @@ prepareAndSpawnVirtualPlayer();
         if (phase.ordinal() > GrowthPhase.STONE_AGE.ordinal()) {
             com.maohi.fakeplayer.ai.CraftingBehavior.autoUpgradeTools(p);
             com.maohi.fakeplayer.ai.CraftingBehavior.autoCraftArmor(p);
-            // V5.17: IRON_AGE 及以后才尝试自动冶炼（防 STONE_AGE 浪费 raw_iron）
+        }
+        // V5.86: STONE_AGE 也触发 autoSmeltOres —— V5.80 之后 derivePhaseFromInventory
+        //   已不因 raw_iron 误推 IRON_AGE，STONE_AGE 炼铁是设计意图的"冶炼前置"。
+        //   autoSmeltOres 内部有 rawIronSlot<0 守卫，没有 raw_iron 时直接跳出，
+        //   不影响纯石器阶段（未挖到铁矿）的假人。
+        if (phase.ordinal() >= GrowthPhase.STONE_AGE.ordinal()) {
             com.maohi.fakeplayer.ai.SmeltingBehavior.autoSmeltOres(p);
         }
         if (phase.ordinal() >= GrowthPhase.NETHER.ordinal()) {
@@ -2528,8 +2560,10 @@ prepareAndSpawnVirtualPlayer();
             //   (IDLE 进入分支是正常 idle→reassign,不计失败)
             // V5.40 PICKUP_DROP 是软超时(3s 等 vanilla 拾取),expire 是预期路径,不算 fail。
             // V5.47.1: targetTooHighVertical 路径已在上面单独 log+计数,避免在此处重复打 expired。
+            // NOTE: V5.80 RETURN_TO_BASE 同 PICKUP_DROP — 走路过程中超时是预期的，不算 fail。
             else if (personality.currentTask != TaskType.IDLE
                 && personality.currentTask != TaskType.PICKUP_DROP
+                && personality.currentTask != TaskType.RETURN_TO_BASE
                 && personality.taskTarget != null
                 && serverTicks > personality.taskExpireTime) {
                 com.maohi.fakeplayer.TaskLogger.log(p, "task_fail",
@@ -2770,6 +2804,45 @@ prepareAndSpawnVirtualPlayer();
                     personality.taskTarget = null;
                 }
 
+            } else if (personality.currentTask == TaskType.RETURN_TO_BASE) {
+                // NOTE: V5.80 回营地任务执行逻辑。
+                //   目标通常是 knownFurnacePos 或 knownWorkbenchPos，由 PhaseIronAge 设置。
+                //   到达（≤4 格）后：扫描并更新已知设施坐标，然后切 IDLE 让 autoSmelt/autoCraft 接管。
+                if (dist <= 16.0) { // 4 格内
+                    // V5.81: 记下到达前的记忆 + 本次回营目标，用于失效清理判定（见下）。
+                    BlockPos prevKnownFurnace   = personality.knownFurnacePos;
+                    BlockPos prevKnownWorkbench = personality.knownWorkbenchPos;
+                    BlockPos returnTarget       = personality.taskTarget;
+                    // 扫描熔炉（24 格半径）+ 工作台（6 格半径）
+                    net.minecraft.server.world.ServerWorld rtbWorld =
+                        (net.minecraft.server.world.ServerWorld) p.getEntityWorld();
+                    BlockPos nearFurnace = com.maohi.fakeplayer.ai.phase.PhaseIronAge.findFurnace(
+                        rtbWorld, p.getBlockPos(), 24);
+                    BlockPos nearWorkbench = com.maohi.fakeplayer.ai.phase.PhaseIronAge.findCraftingTable(
+                        rtbWorld, p.getBlockPos(), 6);
+                    // 熔炉：找到则更新记忆；若本次专程走回旧 knownFurnacePos 却扫不到 →
+                    //   记忆已失效（炉被毁/从未存在）→ 清空，避免下次 P2 又走回幽灵坐标。
+                    //   仅当「回营目标 == 旧坐标」时才清，回工作台/P4 场景不误清有效炉记忆。
+                    if (nearFurnace != null) {
+                        personality.knownFurnacePos = nearFurnace;
+                    } else if (prevKnownFurnace != null && prevKnownFurnace.equals(returnTarget)) {
+                        personality.knownFurnacePos = null;
+                        TaskLogger.log(p, "known_furnace_cleared", "stalePos", prevKnownFurnace);
+                    }
+                    // 工作台：同理（专程走回旧 knownWorkbenchPos 却扫不到 → 清，避免 P4 永远卡升级）。
+                    if (nearWorkbench != null) {
+                        personality.knownWorkbenchPos = nearWorkbench;
+                    } else if (prevKnownWorkbench != null && prevKnownWorkbench.equals(returnTarget)) {
+                        personality.knownWorkbenchPos = null;
+                        TaskLogger.log(p, "known_workbench_cleared", "stalePos", prevKnownWorkbench);
+                    }
+                    Personality.resetTaskFailCount(personality);
+                    personality.currentTask = TaskType.IDLE;
+                    personality.taskTarget  = null;
+                    TaskLogger.log(p, "return_to_base_arrived",
+                        "furnace", nearFurnace, "workbench", nearWorkbench);
+                }
+
             } else {
                 if (dist <= 4.0 && ThreadLocalRandom.current().nextInt(100) < 20) {
                     // V5.30 EXPLORE/其它任务抵达 4 格以内 → 算成功,清失败计数
@@ -2886,6 +2959,32 @@ prepareAndSpawnVirtualPlayer();
         personality.taskTarget = minePos;
         personality.taskExpireTime = server.getTicks() + TimingConstants.TICK_TIMEOUT_PICKUP + 100; // TICK_TIMEOUT_PICKUP=100(5s) + 100 buffer(5s) = 10s total
         personality.pathWaypoint = null; // 清掉残余 waypoint,doSmartMove 直接朝 minePos
+    }
+
+    /**
+     * NOTE: V5.80 ≌「有意义的方块」判定 — 決定是否刷新 lastProgressAt。
+     * 有意义 = 实质资源推进，即挂着就能实现的进展。
+     * 包括：矿石类（含 deepslate 变种）/ 原木 / 末地石 / 拦路岩 / 古老残骸。
+     * 不包括： stone / cobblestone / dirt / gravel / sand 等普通方块。
+     * 这个判定让 scanIdleNoProgressBots 能踢出「一直挖石头但永远不升级」的假人。
+     */
+    private static boolean isMeaningfulBlock(String blockId) {
+        if (blockId == null) return false;
+        // 矿石类（iron_ore, coal_ore, gold_ore, diamond_ore, emerald_ore,
+        //    copper_ore, lapis_ore, redstone_ore 及对应 deepslate_ 变种）
+        if (blockId.endsWith("_ore")) return true;
+        // 原木（oak_log, birch_log, spruce_log 等——砍树是正正经经的进展）
+        if (blockId.endsWith("_log") || blockId.endsWith("_wood")) return true;
+        // 末地石 / 拦路岩 / 古老残骸 / 海晏葱
+        if (blockId.equals("end_stone") || blockId.equals("obsidian")
+                || blockId.equals("ancient_debris") || blockId.equals("sea_lantern")) return true;
+        // 基岩 / 深板岩（工方内挑能到矿层，和普通挖天址不同）
+        if (blockId.equals("stone") || blockId.equals("deepslate")) {
+            // NOTE: stone 单独拥有意义性容易争议，这里保守地不算。
+            //   理由：如果它算，爆领眼挖山的假人也会刷新进展，效果和回退到旧逻辑没区别。
+            return false;
+        }
+        return false;
     }
 
     /**
@@ -3271,7 +3370,15 @@ prepareAndSpawnVirtualPlayer();
                 personality.miningPos = null;
                 personality.miningElapsedTicks = 0;
                 personality.blocksMinedTotal++;
-                personality.lastProgressAt = System.currentTimeMillis(); // V5.59 (idle-rescue)
+                // NOTE: V5.80 精确化 lastProgressAt 刷新 — 只有挖到「有意义的方块」才算实质进展。
+                //   旧逻辑：任何方块（含圆石/泥土）都刷新 → 假人一直挖石头但不冶炼不升级，
+                //   scanIdleNoProgressBots 的 30min 阈值永远被重置，卡死假人永远不被踢出重置。
+                //   有意义的方块：矿石类（含 deepslate 变种）/ 原木（砍树有效）/ 末地石等。
+                //   普通 stone / cobblestone / dirt / gravel 不刷新——它们是"路上的废料"，
+                //   挖再多也不代表假人在向目标迈进。
+                if (minedType != null && isMeaningfulBlock(minedType)) {
+                    personality.lastProgressAt = System.currentTimeMillis(); // V5.80 精确版
+                }
                 // V5.30 真实挖断方块 → 失败计数清零(久远失败不该阻塞正常作业流)
                 Personality.resetTaskFailCount(personality);
                 if (personality.miningSkill < 1.5) personality.miningSkill += 0.001;

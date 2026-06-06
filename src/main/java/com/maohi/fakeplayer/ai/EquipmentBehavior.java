@@ -36,27 +36,31 @@ public final class EquipmentBehavior {
 
 		PlayerInventory inv = player.getInventory();
 		switch (currentTask) {
-			case WOODCUTTING:
-				for (int i = 0; i < 9; i++) {
-					if (inv.getStack(i).isOf(Items.WOODEN_AXE) || inv.getStack(i).isOf(Items.STONE_AXE)
-						|| inv.getStack(i).isOf(Items.IRON_AXE) || inv.getStack(i).isOf(Items.DIAMOND_AXE)) {
-						PacketHelper.setSelectedSlot(player, i);
-						return;
-					}
-				}
+			case WOODCUTTING: {
+				// V5.84: 按品级优选斧（钻>铁>石>木），而非取 hotbar 第一把 —— 收尾更快、durability 折损更合理。
+				net.minecraft.item.Item[] axeOrder = {
+					Items.NETHERITE_AXE, Items.DIAMOND_AXE, Items.IRON_AXE, Items.STONE_AXE, Items.WOODEN_AXE
+				};
+				if (selectBestTool(player, inv, axeOrder)) return;
 				// V5.43.3 P-3.F: 没斧头 → 切到空手槽(hotbar 第一个空 slot)
 				switchToEmptySlotIfBetter(player, inv);
 				break;
-			case MINING:
-				for (int i = 0; i < 9; i++) {
-					if (inv.getStack(i).isOf(Items.WOODEN_PICKAXE) || inv.getStack(i).isOf(Items.STONE_PICKAXE)
-						|| inv.getStack(i).isOf(Items.IRON_PICKAXE) || inv.getStack(i).isOf(Items.DIAMOND_PICKAXE)) {
-						PacketHelper.setSelectedSlot(player, i);
-						return;
-					}
-				}
+			}
+			case MINING: {
+				// V5.84: 按品级优选镐（钻>铁>石>木），而非取 hotbar 第一把。
+				//   关键：用石/木镐挖钻石矿(需铁镐+)会破坏掉、0 掉落 —— 必须确保手持最好的镐,
+				//   否则铁器假人挖到钻石矿也拿不到钻石,永远升不了 DIAMOND_AGE。
+				net.minecraft.item.Item[] pickOrder = {
+					Items.NETHERITE_PICKAXE, Items.DIAMOND_PICKAXE, Items.IRON_PICKAXE, Items.STONE_PICKAXE, Items.WOODEN_PICKAXE
+				};
+				if (selectBestTool(player, inv, pickOrder)) return;
 				// V5.43.3 P-3.F: 没镐 → 切到空手槽(空手挖石头出不了 cobble,但至少能挖 stone_age 起始的泥土)
 				switchToEmptySlotIfBetter(player, inv);
+				break;
+			}
+			case HUNTING:
+				// V5.82: 战斗持械 —— hotbar 里挑最好的剑（钻/铁/石/木），没剑回退斧（斧也能打）。
+				selectSwordOrAxe(player, inv);
 				break;
 			default:
 				break;
@@ -88,6 +92,49 @@ public final class EquipmentBehavior {
 			}
 		}
 		// 没空槽,保持原状(vanilla 真人也只能凑合)
+	}
+
+	/**
+	 * V5.82: 战斗持械 —— 选 hotbar 里最好的剑（钻>铁>石>木>金），没剑回退斧。供 HUNTING 任务调用。
+	 *   autoSwitchTool 入口 1/20 节流下，假人开打后约 1 秒内拔出武器，反作弊看不出。
+	 */
+	private static boolean selectSwordOrAxe(ServerPlayerEntity player, PlayerInventory inv) {
+		net.minecraft.item.Item[] order = {
+			Items.NETHERITE_SWORD, Items.DIAMOND_SWORD, Items.IRON_SWORD, Items.STONE_SWORD, Items.WOODEN_SWORD, Items.GOLDEN_SWORD,
+			Items.NETHERITE_AXE, Items.DIAMOND_AXE, Items.IRON_AXE, Items.STONE_AXE, Items.WOODEN_AXE
+		};
+		return selectBestTool(player, inv, order);
+	}
+
+	/**
+	 * V5.84: 按给定品级顺序(最好→最差)选工具并持到主手。
+	 *   逐档遍历:每档先扫 hotbar(0-8),再扫主背包(9-35)——主背包命中则 SWAP 到 hotbar slot 0 再持
+	 *   (同 autoEquipArmor 套路)。命中返回 true,未命中返回 false(调用方决定回退)。
+	 *   V5.84.1 关键修复:新合成/拾取的工具走 QUICK_MOVE 常落在主背包(9-35),旧版只扫 hotbar →
+	 *     "镐明明在包里却用不上",P5 挖矿空手 / 用石镐挖钻石矿 0 掉落。逐档遍历两处保证拿到全局
+	 *     最好材质且真换进手里能用。耐久不另判:near-dead 镐照样挖到断（"用到爆"），断后补镐链补新的。
+	 */
+	private static boolean selectBestTool(ServerPlayerEntity player, PlayerInventory inv, net.minecraft.item.Item[] order) {
+		for (net.minecraft.item.Item want : order) {
+			for (int i = 0; i < 9; i++) {
+				if (inv.getStack(i).isOf(want)) {
+					PacketHelper.setSelectedSlot(player, i);
+					return true;
+				}
+			}
+			// 主背包(9-35):上限 36,排除护甲(36-39)/副手(40)。副手 inv 索引 40→屏幕槽 45 ≠ 40,
+			//   直接拿 i 当屏幕槽做 SWAP 会错位;且镐不会进护甲槽。同 autoEquipArmor 的 < 36 约定。
+			for (int i = 9; i < 36; i++) {
+				if (inv.getStack(i).isOf(want)) {
+					// 主背包 → SWAP 到 hotbar slot 0(button 0),再持。主背包 player-inv 索引 9-35 == 屏幕槽 9-35。
+					com.maohi.fakeplayer.network.InventoryActionHelper.clickSlot(
+						player, i, 0, net.minecraft.screen.slot.SlotActionType.SWAP);
+					PacketHelper.setSelectedSlot(player, 0);
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/** 自动装备背包中防御值更高的护甲 */

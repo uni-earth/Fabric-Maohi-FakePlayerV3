@@ -18,5 +18,10 @@ public enum TaskType {
 	RECONNECTING,
 	HUNTING,
 	CRAFTING,
-	STRIP_MINE
+	STRIP_MINE,
+	// NOTE: 回营地任务——假人发现缺少熔炉/工作台时主动导航回已知设施坐标。
+	//   目标 = knownFurnacePos（优先）或 knownWorkbenchPos；
+	//   若两者皆无，则向 world spawn 方向 EXPLORING。
+	//   到达后自动切 IDLE，让 autoSmeltOres / autoCraftStoneTools 接管后续操作。
+	RETURN_TO_BASE
 }

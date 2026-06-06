@@ -136,18 +136,22 @@ public final class CraftingBehavior {
 			target = Items.WOODEN_PICKAXE;
 			ticks = 40;
 		}
-		// 5. 有任意镐(可以是木镐) + cobble ≥ 3 没石镐 → 升级石镐
-		else if (hasAnyPickaxe && !hasStonePickaxe && cobbleCount >= 3 && workbenchNearby) {
+		// 5. 有任意镐(可以是木镐) + cobble ≥ 3 + 木棍 ≥ 2 没石镐 → 升级石镐
+		// V5.73: 加 stickCount >= 2 守卫 — 石镐配方 = 3 圆石 + 2 木棍,缺木棍时不进这步空转尝试。
+		//   缺木棍会落到步③(plank≥2 合木棍);若连木板都没有,由 PhaseStoneAge V5.73 木头兜底去砍树补料。
+		else if (hasAnyPickaxe && !hasStonePickaxe && cobbleCount >= 3 && stickCount >= 2 && workbenchNearby) {
 			target = Items.STONE_PICKAXE;
 			ticks = 40;
 		}
 		// 6. 有石镐没石剑 → 合石剑
-		else if (hasStonePickaxe && !hasStoneSword && cobbleCount >= 3 && workbenchNearby) {
+		// V5.82: 加 stickCount >= 1 守卫 — 石剑配方 = 2 圆石 + 1 木棍，缺木棍时不进这步空转失败。
+		else if (hasStonePickaxe && !hasStoneSword && cobbleCount >= 3 && stickCount >= 1 && workbenchNearby) {
 			target = Items.STONE_SWORD;
 			ticks = 40;
 		}
 		// 7. 有石镐没石斧 → 合石斧
-		else if (hasStonePickaxe && !hasStoneAxe && cobbleCount >= 3 && workbenchNearby) {
+		// V5.82: 加 stickCount >= 2 守卫 — 石斧配方 = 3 圆石 + 2 木棍。
+		else if (hasStonePickaxe && !hasStoneAxe && cobbleCount >= 3 && stickCount >= 2 && workbenchNearby) {
 			target = Items.STONE_AXE;
 			ticks = 40;
 		}
@@ -203,26 +207,159 @@ public final class CraftingBehavior {
 			"workbench", workbenchNearby);
 	}
 
+	/** V5.84: 铁镐剩余耐久低于此视为"需替换",触发主动补镐。残镐不计入"保 2 把"，根治
+	 *  "明明有镐、耐久不够用、count 却满 2 不补"的死锁。100/250 ≈ 留 40% 才换，配合 strip-mine
+	 *  用到 ~30 abort，整体利用率仍 ~88%（残镐留作 P5 兜底用到爆）。 */
+	public static final int IRON_PICK_MAINTAIN_DUR = 100;
+
+	/** V5.84: 数"健康"铁/钻/下界合金镐（剩余耐久 ≥ IRON_PICK_MAINTAIN_DUR）。
+	 *  供 autoUpgradeTools / hasPendingGearCraft / PhaseIronAge 钻石下挖门 共用同一口径，杜绝死锁带。 */
+	public static int countHealthyIronPickaxes(ServerPlayerEntity player) {
+		PlayerInventory inv = player.getInventory();
+		int n = 0;
+		for (int i = 0; i < inv.size(); i++) {
+			ItemStack s = inv.getStack(i);
+			Item it = s.getItem();
+			if (it == Items.IRON_PICKAXE || it == Items.DIAMOND_PICKAXE || it == Items.NETHERITE_PICKAXE) {
+				if (s.getMaxDamage() - s.getDamage() >= IRON_PICK_MAINTAIN_DUR) n++;
+			}
+		}
+		return n;
+	}
+
+	/** V5.84.1: 是否已有可用钻石/下界合金镐（剩余耐久 >0）。钻镐是进下界硬前置（挖黑曜石需钻镐+），
+	 *  供 autoUpgradeTools 决定是否"直接合钻镐"。用到爆把它挖断后 count→0 → 有 3 钻时自动再合一把。 */
+	public static boolean hasDiamondPickaxe(ServerPlayerEntity player) {
+		PlayerInventory inv = player.getInventory();
+		for (int i = 0; i < inv.size(); i++) {
+			ItemStack s = inv.getStack(i);
+			Item it = s.getItem();
+			if (it == Items.DIAMOND_PICKAXE || it == Items.NETHERITE_PICKAXE) {
+				if (s.getMaxDamage() - s.getDamage() > 0) return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * V5.84.1: 钻石版 hasPendingGearCraft —— 判断"现在的料是否够立即合钻镐或缺位钻甲"，供
+	 *   PhaseDiamondAge 主动驱动决定是否值得回工作台/就地建台驻留。只看材料就绪（不查工作台距离——
+	 *   驱动负责把假人带过去）；口径与 autoUpgradeTools 钻镐分支(直接合) + autoCraftArmor 钻甲阈值
+	 *   (胸8/腿7/头5/靴4) 一一对应。料不够返回 false → 落到挖钻/挖矿补料，不空驻留。
+	 *   优先级（钻镐先于钻甲）由 VPM 调用顺序保证：autoUpgradeTools 先于 autoCraftArmor 跑。
+	 */
+	public static boolean hasPendingDiamondGearCraft(ServerPlayerEntity player) {
+		PlayerInventory inv = player.getInventory();
+		int diamond = 0, stick = 0;
+		for (int i = 0; i < inv.size(); i++) {
+			ItemStack s = inv.getStack(i);
+			if (s.isEmpty()) continue;
+			if (s.isOf(Items.DIAMOND)) diamond += s.getCount();
+			else if (s.isOf(Items.STICK)) stick += s.getCount();
+		}
+		// 钻镐（进下界硬前置，最高优先）：无钻镐 + 3 钻 + 2 棍
+		if (!hasDiamondPickaxe(player) && diamond >= 3 && stick >= 2) return true;
+		// 钻甲：任一槽未达钻级（armor level < 3，空槽 getArmorLevel=0 也算）且钻石够（同 autoCraftArmor 阈值）
+		net.minecraft.entity.EquipmentSlot head = net.minecraft.entity.EquipmentSlot.HEAD;
+		net.minecraft.entity.EquipmentSlot chest = net.minecraft.entity.EquipmentSlot.CHEST;
+		net.minecraft.entity.EquipmentSlot legs = net.minecraft.entity.EquipmentSlot.LEGS;
+		net.minecraft.entity.EquipmentSlot feet = net.minecraft.entity.EquipmentSlot.FEET;
+		if ((getArmorLevel(player.getEquippedStack(chest)) < 3 && diamond >= 8)
+				|| (getArmorLevel(player.getEquippedStack(legs)) < 3 && diamond >= 7)
+				|| (getArmorLevel(player.getEquippedStack(head)) < 3 && diamond >= 5)
+				|| (getArmorLevel(player.getEquippedStack(feet)) < 3 && diamond >= 4)) return true;
+		return false;
+	}
+
+	/**
+	 * V5.84.1: 聚焦的"工作台 item 工厂" —— 只做 autoCraftStoneTools 的步 1-2（log→plank、plank→table），
+	 *   绝不碰步 3-12（否则在 DIAMOND_AGE 会乱合石斧/备用石镐/熔炉/锄/床）。供 PhaseDiamondAge 就地建台：
+	 *   背包无 CRAFTING_TABLE item 且附近无台时先合一张台 item（背包内 2×2，不需世界台——破鸡生蛋），
+	 *   随后已在跑的 BlockPlacer.tryPlaceCraftingTable 落地。
+	 *   @return true = 已进入 CRAFTING（调用方应驻留等待）；false = 料不够（调用方去砍树补木）。
+	 */
+	public static boolean craftCraftingTableOnly(ServerPlayerEntity player) {
+		com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(player);
+		if (pers == null || pers.currentTask == com.maohi.fakeplayer.TaskType.CRAFTING) return false;
+		PlayerInventory inv = player.getInventory();
+		int logCount = 0, plankCount = 0;
+		boolean hasCraftingTable = false;
+		for (int i = 0; i < inv.size(); i++) {
+			ItemStack s = inv.getStack(i);
+			if (s.isEmpty()) continue;
+			if (s.isIn(ItemTags.LOGS)) logCount += s.getCount();
+			else if (s.isIn(ItemTags.PLANKS)) plankCount += s.getCount();
+			else if (s.isOf(Items.CRAFTING_TABLE)) hasCraftingTable = true;
+		}
+		if (hasCraftingTable) return false; // 已有台 item，交给 BlockPlacer 放，不用再合
+		Item target;
+		int ticks;
+		if (logCount >= 1 && plankCount < 4) { target = Items.OAK_PLANKS; ticks = 20; }
+		else if (plankCount >= 4) { target = Items.CRAFTING_TABLE; ticks = 30; }
+		else return false; // 无 log 也无 4 plank → 调用方去砍树
+		pers.currentTask = com.maohi.fakeplayer.TaskType.CRAFTING;
+		pers.craftingTarget = target;
+		pers.craftingTicks = ticks + ThreadLocalRandom.current().nextInt(15);
+		pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
+		com.maohi.fakeplayer.TaskLogger.log(player, "craft_start",
+			"target", net.minecraft.registry.Registries.ITEM.getId(target).getPath(),
+			"via", "diamond_table_only", "logs", logCount, "planks", plankCount);
+		return true;
+	}
+
 	/**
 	 * 自动升级工具 (V5.1)：触发合成状态机
 	 */
 	public static void autoUpgradeTools(ServerPlayerEntity player) {
 		com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(player);
 		if (pers == null || pers.currentTask == com.maohi.fakeplayer.TaskType.CRAFTING) return;
-		if (ThreadLocalRandom.current().nextInt(500) != 0) return;
+		// V5.82: 去掉 1/500 节流 —— 贴工作台时确定性升级（CRAFTING 守卫保证一次只合一件，不洪泛）。
 
 		PlayerInventory inv = player.getInventory();
+
+		// V5.84.1: 钻石镐"直接合" —— DIAMOND_AGE 进下界的硬前置（挖黑曜石需钻镐+，没钻镐 → 黑曜石永远 0
+		//   → 下界门造不出 → 卡死 DIAMOND_AGE）。关键：不依赖"hotbar 有 iron_pickaxe 当触发"——strip-mine
+		//   用到爆后铁镐常已没/掉背包，旧的 iron_pickaxe→钻镐 升级分支会永远不触发。改为：无钻镐 + 3 钻 +
+		//   2 棍 + 贴台 → 直接合（配方 3 钻 + 2 棍，executeCraft 已支持）。放在铁镐维护之前：钻镐同时也计入
+		//   countHealthyIronPickaxes（钻/下界合金镐都算），合出钻镐即满足挖矿镐需求。
+		//   NOTE: 仍要求工作台 6 格内才真正合；DIAMOND_AGE 把假人带回台的驱动是另一处缺口（见下方报告）。
+		if (!hasDiamondPickaxe(player)
+				&& hasMaterial(inv, Items.DIAMOND, 3) && hasMaterial(inv, Items.STICK, 2)) {
+			if (findCraftingTable(player, 6) == null) return;
+			pers.currentTask = com.maohi.fakeplayer.TaskType.CRAFTING;
+			pers.craftingTarget = Items.DIAMOND_PICKAXE;
+			pers.craftingTicks = 60 + ThreadLocalRandom.current().nextInt(40);
+			pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
+			return;
+		}
+
+		// V5.84: 保 2 把"健康"铁镐（剩余耐久 ≥ IRON_PICK_MAINTAIN_DUR）。直接按料合，不依赖石镐模板。
+		//   旧逻辑两个断点:(1) 按"数量"保 2 把不看耐久 → 2 把残铁镐 count=2 → 不补,但耐久不够用
+		//   → "有镐却用不了也不补"死锁;(2) 升级依赖 hotbar 里有 stone_pickaxe 当模板,而铁器期 best-tier
+		//   选镐不用石镐、石镐磨断后没了 → 连模板都没有,补不出铁镐。改为"健康铁镐<2 且料够 → 直接合铁镐",
+		//   两个断点一起根治。铁镐配方 3 铁锭 + 2 木棍,与升级路径产物一致,executeCraft 已支持该 target。
+		if (countHealthyIronPickaxes(player) < 2
+				&& hasMaterial(inv, Items.IRON_INGOT, 3) && hasMaterial(inv, Items.STICK, 2)) {
+			if (findCraftingTable(player, 6) == null) return;
+			pers.currentTask = com.maohi.fakeplayer.TaskType.CRAFTING;
+			pers.craftingTarget = Items.IRON_PICKAXE;
+			pers.craftingTicks = 60 + ThreadLocalRandom.current().nextInt(40);
+			pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
+			return;
+		}
+
+		// 其余工具升级（找 hotbar 对应工具作触发）：石斧→铁斧 / 石剑→铁剑 / 铁剑→钻剑。
+		//   （钻石镐已上移为"直接合"，这里不再走 iron_pickaxe→钻镐，避免已有钻镐时重复合浪费钻石。）
 		for (int i = 0; i < 9; i++) {
 			ItemStack tool = inv.getStack(i);
 			if (tool.isEmpty()) continue;
 			String id = net.minecraft.registry.Registries.ITEM.getId(tool.getItem()).getPath();
 
+			// V5.82: 补木棍守卫（镐/斧 +2 木棍、剑 +1 木棍）。
 			Item target = null;
-			if (id.startsWith("stone_pickaxe") && hasMaterial(inv, Items.IRON_INGOT, 3)) target = Items.IRON_PICKAXE;
-			else if (id.startsWith("iron_pickaxe") && hasMaterial(inv, Items.DIAMOND, 3)) target = Items.DIAMOND_PICKAXE;
-			else if (id.startsWith("stone_axe") && hasMaterial(inv, Items.IRON_INGOT, 3)) target = Items.IRON_AXE;
-			else if (id.startsWith("stone_sword") && hasMaterial(inv, Items.IRON_INGOT, 2)) target = Items.IRON_SWORD;
-			else if (id.startsWith("iron_sword") && hasMaterial(inv, Items.DIAMOND, 2)) target = Items.DIAMOND_SWORD;
+			if (id.startsWith("stone_axe") && hasMaterial(inv, Items.IRON_INGOT, 3) && hasMaterial(inv, Items.STICK, 2)) target = Items.IRON_AXE;
+			else if (id.startsWith("stone_sword") && hasMaterial(inv, Items.IRON_INGOT, 2) && hasMaterial(inv, Items.STICK, 1)) target = Items.IRON_SWORD;
+			else if (id.startsWith("iron_sword") && hasMaterial(inv, Items.DIAMOND, 2) && hasMaterial(inv, Items.STICK, 1)) target = Items.DIAMOND_SWORD;
 
 			if (target != null) {
 				if (findCraftingTable(player, 6) == null) return;
@@ -243,10 +380,11 @@ public final class CraftingBehavior {
 	public static void autoCraftArmor(ServerPlayerEntity player) {
 		com.maohi.fakeplayer.Personality pers = com.maohi.fakeplayer.Personality.get(player);
 		if (pers == null || pers.currentTask == com.maohi.fakeplayer.TaskType.CRAFTING) return;
-		if (ThreadLocalRandom.current().nextInt(500) != 0) return;
+		// V5.82: 去掉 1/500 节流与"包满即跳过"。1/500 让贴台造甲几乎抽不中；"空槽"前置过严——
+		//   造甲会先消耗 4~8 铁锭腾出槽位，结果件必有处可放。铁锭预算由调用顺序保证
+		//   （autoUpgradeTools 先跑且占 CRAFTING → 镐/剑天然优先于盔甲）。
 
 		PlayerInventory inv = player.getInventory();
-		if (inv.getEmptySlot() == -1) return; // 包满则不合防具
 
 		int ironCount = 0, diamondCount = 0;
 		for (int i = 0; i < inv.size(); i++) {
@@ -264,7 +402,11 @@ public final class CraftingBehavior {
 		ItemStack head = player.getEquippedStack(net.minecraft.entity.EquipmentSlot.HEAD);
 		ItemStack feet = player.getEquippedStack(net.minecraft.entity.EquipmentSlot.FEET);
 
-		boolean canDiamond = pers.growthPhase != null && pers.growthPhase.ordinal() >= com.maohi.fakeplayer.GrowthPhase.DIAMOND_AGE.ordinal();
+		// V5.84.1: 钻甲必须等钻镐先合出来 —— 钻镐是进下界硬前置(挖黑曜石需钻镐+),钻石优先供镐,
+		//   不被钻甲抢走(否则缺木棍合不了镐时,8 钻会先变胸甲,关键钻镐被无限推迟)。
+		boolean canDiamond = pers.growthPhase != null
+			&& pers.growthPhase.ordinal() >= com.maohi.fakeplayer.GrowthPhase.DIAMOND_AGE.ordinal()
+			&& hasDiamondPickaxe(player);
 
 		if (canDiamond && (chest.isEmpty() || getArmorLevel(chest) < 3) && diamondCount >= 8) target = Items.DIAMOND_CHESTPLATE;
 		else if (canDiamond && (legs.isEmpty() || getArmorLevel(legs) < 3) && diamondCount >= 7) target = Items.DIAMOND_LEGGINGS;
@@ -286,6 +428,56 @@ public final class CraftingBehavior {
 		
 		// P2-C 弓箭合成
 		autoCraftRangedGear(player, pers, inv);
+	}
+
+	/**
+	 * V5.82: 判断"现在背包是否有可立即合成的装备（武器/盔甲/备用铁镐）"，供 PhaseIronAge
+	 *   装备补全驱动决定是否值得回工作台驻留。只看材料就绪（不查工作台距离——驱动负责走过去）；
+	 *   口径与 autoCraftStoneTools 步6/7、autoUpgradeTools、autoCraftArmor 的合成条件一一对应，
+	 *   料不够则返回 false，让假人落到 P5 挖矿/砍树补料，避免空驻留死循环。
+	 */
+	public static boolean hasPendingGearCraft(ServerPlayerEntity player) {
+		PlayerInventory inv = player.getInventory();
+		int cobble = 0, stick = 0, iron = 0;
+		boolean hasStoneSwordExact = false;
+		boolean hasAnySword = false, hasIronSwordOrBetter = false;
+		for (int i = 0; i < inv.size(); i++) {
+			ItemStack s = inv.getStack(i);
+			if (s.isEmpty()) continue;
+			if (s.isOf(Items.COBBLESTONE) || s.isOf(Items.COBBLED_DEEPSLATE)) cobble += s.getCount();
+			else if (s.isOf(Items.STICK)) stick += s.getCount();
+			else if (s.isOf(Items.IRON_INGOT)) iron += s.getCount();
+			Item it = s.getItem();
+			if (it == Items.STONE_SWORD) { hasStoneSwordExact = true; hasAnySword = true; }
+			if (it == Items.IRON_SWORD || it == Items.DIAMOND_SWORD || it == Items.NETHERITE_SWORD) {
+				hasAnySword = true; hasIronSwordOrBetter = true;
+			}
+		}
+		// 武器：完全没剑 + 圆石/木棍够 → 可合石剑（对应 autoCraftStoneTools 步6）
+		if (!hasAnySword && cobble >= 3 && stick >= 1) return true;
+		// 武器升级：有石剑、缺铁剑 + 料够（对应 autoUpgradeTools）
+		if (hasStoneSwordExact && !hasIronSwordOrBetter && iron >= 2 && stick >= 1) return true;
+		// 耐久：健康铁镐（耐久 ≥ IRON_PICK_MAINTAIN_DUR）不足 2 把 + 料够 → 回工作台补镐。
+		//   （对应 autoUpgradeTools 的直接补镐；不再依赖石镐模板，残镐也触发补新镐，根治"有镐却用不了不补"死锁）
+		if (countHealthyIronPickaxes(player) < 2 && iron >= 3 && stick >= 2) return true;
+		// 盔甲：阈值与 autoCraftArmor 铁件一一对应（靴4/头5/腿7/胸8），有缺且料够才驻留
+		net.minecraft.entity.EquipmentSlot head = net.minecraft.entity.EquipmentSlot.HEAD;
+		net.minecraft.entity.EquipmentSlot chest = net.minecraft.entity.EquipmentSlot.CHEST;
+		net.minecraft.entity.EquipmentSlot legs = net.minecraft.entity.EquipmentSlot.LEGS;
+		net.minecraft.entity.EquipmentSlot feet = net.minecraft.entity.EquipmentSlot.FEET;
+		if ((getArmorLevel(player.getEquippedStack(chest)) < 2 && iron >= 8)
+				|| (getArmorLevel(player.getEquippedStack(legs)) < 2 && iron >= 7)
+				|| (getArmorLevel(player.getEquippedStack(head)) < 2 && iron >= 5)
+				|| (getArmorLevel(player.getEquippedStack(feet)) < 2 && iron >= 4)) return true;
+		return false;
+	}
+
+	/** V5.83: 四个护甲槽是否都已 ≥ 铁级（armor level ≥ 2）。供 PhaseIronAge 调节熔炼目标锭数。 */
+	public static boolean hasFullIronArmor(ServerPlayerEntity player) {
+		return getArmorLevel(player.getEquippedStack(net.minecraft.entity.EquipmentSlot.HEAD)) >= 2
+			&& getArmorLevel(player.getEquippedStack(net.minecraft.entity.EquipmentSlot.CHEST)) >= 2
+			&& getArmorLevel(player.getEquippedStack(net.minecraft.entity.EquipmentSlot.LEGS)) >= 2
+			&& getArmorLevel(player.getEquippedStack(net.minecraft.entity.EquipmentSlot.FEET)) >= 2;
 	}
 
 	private static void autoCraftRangedGear(ServerPlayerEntity player, com.maohi.fakeplayer.Personality pers, PlayerInventory inv) {

@@ -34,15 +34,16 @@ public class StripMineBehavior {
         int y = player != null ? player.getBlockY() : pers.stripMineStartY;
         TaskLogger.log(player, "stripmine_abort", "reason", reason, "y", y);
         
-        if (!"got_iron".equals(reason)) {
+        if (!"got_iron".equals(reason) && !"got_diamond".equals(reason)) {
             pers.stripMineState = PhaseStoneAge.SubPhase.STRIP_MINE_ASCEND;
             pers.currentTask = TaskType.STRIP_MINE;
-            // V5.72: 冷却分级 — 无害退出(没找到铁 max_len / 被挡 blocked_layer / 配置关闭)快速重试,
-            //   真危险(血量低 / 岩浆 / 触底 / 无耐久镐)才长冷却。
-            //   旧行为:任何非 got_iron 一律 30min 冷却,卡住的 bot 约 40min 才重试一次 → strip-mine
-            //   几乎不工作。无害退出后 bot 会 ASCEND 回地表、移动到新位置,短冷却让它很快换地方再下矿。
+            // V5.72: 冷却分级 — 无害退出（没找到矿 max_len / 被挡 blocked_layer / 配置关闭 / 断镐
+            //   low_durability）快速重试；真危险（血量低 / 岩浆 / 触底）才长冷却。
+            //   V5.84: low_durability 由长冷却改为短冷却 —— 补镐链已根治（autoUpgradeTools 按健康耐久
+            //   主动补铁镐，不再死锁），断镐后假人 ascend → 回工作台补镐 → 应尽快重试下挖，10min 太久。
             MaohiConfig cfg = MaohiConfig.getInstance();
-            boolean benign = "max_len".equals(reason) || "blocked_layer".equals(reason) || "disabled".equals(reason);
+            boolean benign = "max_len".equals(reason) || "blocked_layer".equals(reason)
+                || "disabled".equals(reason) || "low_durability".equals(reason);
             int cooldownMin = benign
                 ? (cfg != null ? cfg.stripMineBenignCooldownMinutes : 2)
                 : (cfg != null ? cfg.stripMineCooldownMinutes : 10);
@@ -98,20 +99,24 @@ public class StripMineBehavior {
             return;
         }
 
-        // 检查耐用度
-        if (!hasSufficientPickaxe(player, 30)) {
+        // 用到爆(V5.84.1):不留耐久 buffer —— 主手镐挖到断(durability→0 自动消失)为止。
+        //   整背包再无"耐久≥1 的合格镐"才 abort low_durability 回落补镐。requireIron 时只认铁+,
+        //   挖到最后一颗钻石那一下镐恰好 1 耐久也能破坏掉、钻石照样掉。一把也用到爆,不强求两把。
+        boolean requireIron = pers.stripMineForDiamond;
+        if (!hasSufficientPickaxe(player, 1, requireIron)) {
             abort(pers, player, "low_durability");
             return;
         }
 
         // V5.45 FIX C: 确保主手有耐久镐(否则 vanilla breakBlock 按 air 工具判 canHarvest=false → 块不破坏)。
         //   返回 false 表示本 tick 在切槽/搬运,下个 tick 再挖,避免无效 mineBlock 调用。
-        if (!ensurePickaxeInMainHand(player)) {
+        if (!ensurePickaxeInMainHand(player, requireIron)) {
             return;
         }
 
-        // 到达目标层
-        if (pos.getY() <= cfg.stripMineTargetY) {
+        // 到达目标层(V5.84: 钻石 goal 用更深的 stripMineDiamondTargetY)
+        int targetY = pers.stripMineForDiamond ? cfg.stripMineDiamondTargetY : cfg.stripMineTargetY;
+        if (pos.getY() <= targetY) {
             pers.stripMineState = PhaseStoneAge.SubPhase.STRIP_MINE_LAYER;
             return;
         }
@@ -158,9 +163,10 @@ public class StripMineBehavior {
         ServerWorld world = player.getEntityWorld();
         BlockPos pos = player.getBlockPos();
 
-        // 检查是否有铁
-        if (hasIronInInventory(player)) {
-            abort(pers, player, "got_iron");
+        // 检查是否已拿到目标矿物(V5.84: 钻石 goal 收手于 got_diamond,铁 goal 收手于 got_iron)
+        boolean forDiamond = pers.stripMineForDiamond;
+        if (forDiamond ? hasDiamondInInventory(player) : hasIronInInventory(player)) {
+            abort(pers, player, forDiamond ? "got_diamond" : "got_iron");
             return;
         }
 
@@ -169,13 +175,13 @@ public class StripMineBehavior {
             abort(pers, player, "low_hp");
             return;
         }
-        if (!hasSufficientPickaxe(player, 20)) {
+        if (!hasSufficientPickaxe(player, 1, forDiamond)) {  // 用到爆:同 DESCEND,挖到断才回落
             abort(pers, player, "low_durability");
             return;
         }
 
         // V5.45 FIX C: 确保主手有耐久镐(LAYER 阶段同 DESCEND,vanilla breakBlock 按主手判 canHarvest)。
-        if (!ensurePickaxeInMainHand(player)) {
+        if (!ensurePickaxeInMainHand(player, forDiamond)) {
             return;
         }
 
@@ -321,28 +327,34 @@ public class StripMineBehavior {
         return true;
     }
 
-    private static boolean hasSufficientPickaxe(ServerPlayerEntity player, int minDurability) {
+    private static boolean hasSufficientPickaxe(ServerPlayerEntity player, int minDurability, boolean requireIron) {
         for (int i = 0; i < player.getInventory().size(); i++) {
             ItemStack stack = player.getInventory().getStack(i);
-            Item it = stack.getItem();
-            if (it == Items.WOODEN_PICKAXE || it == Items.STONE_PICKAXE || it == Items.IRON_PICKAXE || it == Items.DIAMOND_PICKAXE || it == Items.NETHERITE_PICKAXE) {
-                int max = stack.getMaxDamage();
-                int current = stack.getDamage();
-                if (max - current >= minDurability) return true;
-            }
+            if (!isPickaxeItem(stack.getItem(), requireIron)) continue;
+            int max = stack.getMaxDamage();
+            int current = stack.getDamage();
+            if (max - current >= minDurability) return true;
         }
         return false;
     }
 
     /**
+     * V5.84: 镐材质判定。requireIron=true 时只认铁/钻/下界合金镐 —— 钻石矿掉落表要求铁镐+,
+     *   用石/木镐挖钻石矿会破坏掉、0 掉落,所以钻石 strip-mine 全程要求主手铁镐+。
+     *   requireIron=false 时任意材质镐都算(铁 goal 下挖,石镐即可)。
+     */
+    private static boolean isPickaxeItem(Item it, boolean requireIron) {
+        if (it == Items.IRON_PICKAXE || it == Items.DIAMOND_PICKAXE || it == Items.NETHERITE_PICKAXE) return true;
+        if (requireIron) return false;
+        return it == Items.WOODEN_PICKAXE || it == Items.STONE_PICKAXE;
+    }
+
+    /**
      * V5.45 FIX C: 检查 stack 是否是耐久 ≥ 1 的镐(任何材质)。
      */
-    private static boolean isUsablePickaxe(ItemStack stack) {
+    private static boolean isUsablePickaxe(ItemStack stack, boolean requireIron) {
         if (stack == null || stack.isEmpty()) return false;
-        Item it = stack.getItem();
-        if (it != Items.WOODEN_PICKAXE && it != Items.STONE_PICKAXE
-            && it != Items.IRON_PICKAXE && it != Items.DIAMOND_PICKAXE
-            && it != Items.NETHERITE_PICKAXE) return false;
+        if (!isPickaxeItem(stack.getItem(), requireIron)) return false;
         return stack.getMaxDamage() - stack.getDamage() > 0;
     }
 
@@ -363,18 +375,18 @@ public class StripMineBehavior {
      *
      * 返回值:true = 可挖, false = 本 tick 跳过(切槽中或无镐)
      */
-    private static boolean ensurePickaxeInMainHand(ServerPlayerEntity player) {
+    private static boolean ensurePickaxeInMainHand(ServerPlayerEntity player, boolean requireIron) {
         net.minecraft.entity.player.PlayerInventory inv = player.getInventory();
 
         // 1. 主手已是耐久镐
-        if (isUsablePickaxe(player.getMainHandStack())) return true;
+        if (isUsablePickaxe(player.getMainHandStack(), requireIron)) return true;
 
         // 2. 扫 hotbar(0-8) 找耐久最高的镐
         int bestHotbarSlot = -1;
         int bestHotbarDur = 0;
         for (int i = 0; i < 9; i++) {
             ItemStack s = inv.getStack(i);
-            if (isUsablePickaxe(s)) {
+            if (isUsablePickaxe(s, requireIron)) {
                 int dur = s.getMaxDamage() - s.getDamage();
                 if (dur > bestHotbarDur) {
                     bestHotbarDur = dur;
@@ -394,7 +406,7 @@ public class StripMineBehavior {
         int bestInvDur = 0;
         for (int i = 9; i < inv.size(); i++) {
             ItemStack s = inv.getStack(i);
-            if (isUsablePickaxe(s)) {
+            if (isUsablePickaxe(s, requireIron)) {
                 int dur = s.getMaxDamage() - s.getDamage();
                 if (dur > bestInvDur) {
                     bestInvDur = dur;
@@ -421,6 +433,22 @@ public class StripMineBehavior {
             ItemStack stack = player.getInventory().getStack(i);
             String id = Registries.ITEM.getId(stack.getItem()).getPath();
             if (id.startsWith("iron_") || id.equals("raw_iron")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * V5.84: 是否已有钻石(任意 diamond / diamond_* 物品)。
+     *   判定与 VirtualPlayerManager.derivePhaseFromInventory 的 hasDiamond 完全一致,
+     *   保证"挖到钻石即收手"与"挖到钻石即升 DIAMOND_AGE"在同一帧条件下对齐:
+     *   strip-mine 一旦命中钻石 → got_diamond abort → 下个 assignRandomTask 派发 PhaseDiamondAge。
+     */
+    private static boolean hasDiamondInInventory(ServerPlayerEntity player) {
+        for (int i = 0; i < player.getInventory().size(); i++) {
+            ItemStack stack = player.getInventory().getStack(i);
+            if (stack.isEmpty()) continue;
+            String id = Registries.ITEM.getId(stack.getItem()).getPath();
+            if (id.equals("diamond") || id.startsWith("diamond_")) return true;
         }
         return false;
     }

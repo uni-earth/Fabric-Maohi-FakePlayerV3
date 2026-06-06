@@ -126,6 +126,9 @@ public final class PhaseStoneAge implements Phase {
         int maxStonePickaxeRemainingDurability = 0;
         boolean hasTable = false;
         boolean hasSword = false;
+        // V5.86: 主动冶炼驱动需要感知背包铁矿/铁锭量
+        int rawIronCount = 0;
+        int ironIngotCount = 0;
 
         /** "log 当量":每 4 plank 折算 1 log,粗略表达"还能合多少东西" */
         int logEquivalent() { return logCount + plankCount / 4; }
@@ -145,6 +148,10 @@ public final class PhaseStoneAge implements Phase {
             else if (it == Items.STICK) d.stickCount += n;
             else if (it == Items.COBBLESTONE || it == Items.COBBLED_DEEPSLATE) d.cobbleCount += n;
             else if (it == Items.CRAFTING_TABLE) d.hasTable = true;
+
+            // V5.86: 统计铁矿/铁锭供冶炼优先级块使用
+            if (it == Items.RAW_IRON) d.rawIronCount += n;
+            if (it == Items.IRON_INGOT) d.ironIngotCount += n;
 
             if (it == Items.WOODEN_PICKAXE || it == Items.STONE_PICKAXE
                 || it == Items.IRON_PICKAXE || it == Items.DIAMOND_PICKAXE
@@ -209,6 +216,23 @@ public final class PhaseStoneAge implements Phase {
         //     hasSword=true,后续夜晚也不会再有问题。让 sub-phase 决策接管,bot 该干嘛干嘛。
         // (旧 if-block 已移除)
 
+        // V5.73: 木头补给兜底 — 有镐但没石镐,且木头不足以做石镐所需的 2 木棍时,先去砍树。
+        //   破死锁:STONE_START/STONE_TOOL 子状态从不砍树(只有 STONE_STABLE 才 60% 砍),
+        //   bot 进 STONE_AGE 时木头常已耗尽(做木镐+工作台用光)→ logs=0 && planks<2 && sticks<2
+        //   → 永远凑不齐 2 木棍 → 合不出石镐 → 困在 STONE_TOOL 挖石头囤圆石(实测囤到 29)升不了级,
+        //   几小时 0 进度,且因为一直"成功"挖矿/idle 而 失败0/卡点0(忙碌死锁)。
+        //   本兜底只在"真没木头做木棍"时触发;砍到 ≥1 原木后 CraftingBehavior 自动接力
+        //   (原木→木板→木棍),凑齐即正常合石镐 → STONE_STABLE。圆石遍地,不影响挖矿节奏。
+        //   stripMineState == null 守卫:strip-mine 入口本就要求已有石镐,正常不会同时 wood-starved;
+        //   仅防极端态(镐在 strip-mine 中途耐久爆了)下本兜底与 StripMineBehavior 抢驱动。
+        if (personality.stripMineState == null
+                && !d.hasStonePickaxe && d.stickCount < 2 && d.plankCount < 2 && d.logCount < 1) {
+            com.maohi.fakeplayer.TaskLogger.log(player, "stone_wood_starved",
+                "logs", d.logCount, "planks", d.plankCount, "sticks", d.stickCount, "cobble", d.cobbleCount);
+            assignChopTree(player, personality, ctx);
+            return;
+        }
+
         switch (sub) {
             case STONE_START -> assignMineStone(player, personality, ctx);
 
@@ -246,6 +270,76 @@ public final class PhaseStoneAge implements Phase {
             }
 
             case STONE_STABLE -> {
+                // ── V5.86 SA-P1~P6: 主动冶炼优先级块 ──
+                // 触发条件: 有石镐(确保能挖铁) + 背包有 raw_iron + 铁锭不足 4 锭(进 IRON_AGE 门槛)
+                // 目标 4 锭: 凑够后 derivePhaseFromInventory 推 IRON_AGE,PhaseIronAge 接管继续炼更多。
+                // 优先级高于 strip-mine: 有铁矿先炼比下挖找钻石更快升阶。
+                // NOTE: 完全复用 PhaseIronAge 的 findFurnace / FURNACE_NEAR_SQ / setReturnToBase 模式。
+                final int SA_SMELT_TARGET = 4;
+                if (d.rawIronCount > 0 && d.ironIngotCount < SA_SMELT_TARGET) {
+                    // SA-P0 (V5.86): 冶炼前置 —— 有铁矿要炼但背包无任何可用燃料 → 先砍树补燃料。
+                    //   破软卡死:否则下面贴炉 setIdle 驻留时 autoSmeltOres 因 findFuelSlot<0 空转,
+                    //   反复 park 60tick 不前进。原木/木板都是有效燃料(SmeltingBehavior 同口径);
+                    //   煤/木炭(strip-mine 顺手挖到)也算 → 有燃料则跳过本步直奔熔炉。
+                    if (!com.maohi.fakeplayer.ai.SmeltingBehavior.hasSmeltFuel(player)) {
+                        com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_need_fuel",
+                            "logs", d.logCount, "planks", d.plankCount, "rawIron", d.rawIronCount);
+                        assignChopTree(player, personality, ctx);
+                        return;
+                    }
+                    ServerWorld saWorld = (ServerWorld) player.getEntityWorld();
+                    // SA-P3: 优先信任记忆熔炉坐标，避免每周期 24³ 全量扫描
+                    BlockPos saFurnace = personality.knownFurnacePos;
+                    if (saFurnace == null) {
+                        BlockPos found = PhaseIronAge.findFurnace(saWorld, player.getBlockPos(), 24);
+                        if (found != null) {
+                            personality.knownFurnacePos = found;
+                            saFurnace = found;
+                        }
+                    }
+
+                    if (saFurnace != null) {
+                        double saDistSq = player.getBlockPos().getSquaredDistance(saFurnace);
+                        if (saDistSq <= 25.0) {
+                            // SA-P1: 贴炉(≤5 格) → 短驻留让 autoSmeltOres 连续熔炼
+                            setIdle(personality, player, 60);
+                            com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_park",
+                                "rawIron", d.rawIronCount, "ironIngot", d.ironIngotCount);
+                            return;
+                        } else {
+                            // SA-P2: 知道炉但不在 5 格内 → 走向熔炉
+                            set(personality, player, TaskType.RETURN_TO_BASE, saFurnace);
+                            com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_go_furnace",
+                                "furnace", saFurnace, "distSq", (int) saDistSq);
+                            return;
+                        }
+                    } else {
+                        // 无熔炉记录 → 尝试就地合熔炉
+                        BlockPos saWorkbench = PhaseIronAge.findCraftingTable(
+                            saWorld, player.getBlockPos(), 6);
+                        if (saWorkbench != null && d.cobbleCount >= 8) {
+                            // SA-P4: 附近有工作台 + cobble≥8 → IDLE 让 autoCraftStoneTools 合熔炉
+                            setIdle(personality, player, 100);
+                            com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_craft_furnace",
+                                "cobble", d.cobbleCount, "workbench", saWorkbench);
+                            return;
+                        }
+                        // SA-P5: 有营地工作台记录 → 回营地建炉
+                        BlockPos saBase = personality.knownWorkbenchPos;
+                        if (saBase != null) {
+                            set(personality, player, TaskType.RETURN_TO_BASE, saBase);
+                            com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_return_base",
+                                "reason", "need_furnace", "base", saBase);
+                            return;
+                        }
+                        // SA-P6: 什么都没有 → fall-through 到正常挖矿/砍树
+                        //   autoSmeltOres(V5.86 已解锁 STONE_AGE) 可能在移动中偶然触发。
+                        com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_no_furnace",
+                            "rawIron", d.rawIronCount, "cobble", d.cobbleCount);
+                    }
+                }
+                // ── END SA-P1~P6 ──
+
                 com.maohi.MaohiConfig cfg = com.maohi.MaohiConfig.getInstance();
                 if (cfg != null && cfg.enableStripMine) {
                     long now = System.currentTimeMillis();
@@ -256,12 +350,14 @@ public final class PhaseStoneAge implements Phase {
                                 && player.getHealth() > 14.0f
                                 && d.hasStonePickaxe
                                 && d.maxStonePickaxeRemainingDurability >= 60) {
+                            personality.stripMineForDiamond = false; // V5.84: 石器时代 strip-mine 始终为 IRON goal(挖到 Y15 拿铁)
                             personality.stripMineState = SubPhase.STRIP_MINE_DESCEND;
                             personality.stripMineStartPos = player.getBlockPos().toImmutable();
                             personality.stripMineStartY = player.getBlockY();
                             personality.stripMineTunnelLen = 0;
                             personality.currentTask = TaskType.STRIP_MINE;
                             com.maohi.fakeplayer.TaskLogger.log(player, "stripmine_enter",
+                                "goal", "iron",
                                 "startY", personality.stripMineStartY,
                                 "cycles", personality.stoneStableCyclesNoIron,
                                 "pickDur", d.maxStonePickaxeRemainingDurability);

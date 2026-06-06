@@ -452,6 +452,18 @@ public class BlockPlacer {
 			if (original != currentSlot) {
 				PacketHelper.setSelectedSlot(player, original);
 			}
+			// V5.84.1: 落台确认即记录 knownWorkbenchPos + 上报 SharedResourceMap（共享给其它假人导航过来共用）。
+			//   放此处（stage 2→0 汇合点）：正常放置与 3 次失败兜底强放都汇于此；带 null 安全 re-read，
+			//   避免记录没真正落地/已被破坏的台。report 自带 chunk-60s 限频，重复确认零成本。镜像 furnace 钩子。
+			BlockPos placed = personality.tablePlaceBlockPos;
+			if (placed != null
+					&& player.getEntityWorld().getBlockState(placed).isOf(net.minecraft.block.Blocks.CRAFTING_TABLE)) {
+				personality.knownWorkbenchPos = placed;
+				com.maohi.fakeplayer.ai.cognition.SharedResourceMap.getInstance().report(
+					com.maohi.fakeplayer.ai.cognition.SharedResourceMap.LandmarkType.CRAFTING_TABLE,
+					placed, player.getUuid());
+				com.maohi.fakeplayer.TaskLogger.log(player, "table_placed_recorded", "pos", placed);
+			}
 			resetTablePlaceState(personality);
 		}
 	}
@@ -654,6 +666,13 @@ public class BlockPlacer {
 			int currentSlot = ((PlayerInventoryAccessor) player.getInventory()).getSelectedSlot();
 			if (original != currentSlot) {
 				PacketHelper.setSelectedSlot(player, original);
+			}
+			// NOTE: V5.80 熔炉落地成功 → 记录坐标，供 PhaseIronAge / RETURN_TO_BASE 直接复用
+			BlockPos placed = personality.furnacePlaceBlockPos;
+			if (placed != null
+					&& player.getEntityWorld().getBlockState(placed).isOf(net.minecraft.block.Blocks.FURNACE)) {
+				personality.knownFurnacePos = placed;
+				com.maohi.fakeplayer.TaskLogger.log(player, "furnace_placed_recorded", "pos", placed);
 			}
 			resetFurnacePlaceState(personality);
 		}
