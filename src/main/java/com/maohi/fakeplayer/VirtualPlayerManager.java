@@ -2586,7 +2586,34 @@ prepareAndSpawnVirtualPlayer();
                 personality.taskTarget = next.target;
                 personality.taskExpireTime = server.getTicks() + TimingConstants.TICK_TIMEOUT_EXPLORE;
             } else {
-                assignRandomTask(p, personality);
+                // V5.88: 夜间安全避难守门 —— 夜晚主世界假人有床时 SleepInBedTrigger 会去睡觉。
+                //   没床时不应该派新的远距离任务（探索/砍树/挖矿）让假人裸奔被怪杀死。
+                //   策略：夜晚 + 主世界 + 背包无床 + 附近无现成床 → 保持 IDLE 原地等天亮。
+                //   这不影响 CRAFTING（已守门）、逃跑（isFleeing 更高优先级）、SleepInBedTrigger（由 TriggerRegistry 异步触发）。
+                boolean nightGuard = false;
+                net.minecraft.world.World nightWorld = p.getEntityWorld();
+                if (nightWorld.getRegistryKey() == net.minecraft.world.World.OVERWORLD
+                        && nightWorld.getDifficulty() != net.minecraft.world.Difficulty.PEACEFUL
+                        && nightWorld.isNight()
+                        && personality.currentTask == TaskType.IDLE) {
+                    boolean hasBedInPack = false;
+                    net.minecraft.entity.player.PlayerInventory nightInv = p.getInventory();
+                    for (int ni = 0; ni < nightInv.size(); ni++) {
+                        String nid = net.minecraft.registry.Registries.ITEM
+                            .getId(nightInv.getStack(ni).getItem()).getPath();
+                        if (nid.endsWith("_bed")) { hasBedInPack = true; break; }
+                    }
+                    // NOTE: 背包有床时 SleepInBedTrigger 会处理，我们只管没床的情况
+                    if (!hasBedInPack) {
+                        // 没床 → IDLE 留原地，不派新任务
+                        nightGuard = true;
+                        com.maohi.fakeplayer.TaskLogger.log(p, "night_shelter",
+                            "reason", "no_bed_stay_idle");
+                    }
+                }
+                if (!nightGuard) {
+                    assignRandomTask(p, personality);
+                }
             }
         }
 

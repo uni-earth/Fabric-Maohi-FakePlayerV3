@@ -90,7 +90,7 @@ public class MaohiConfig {
     public double spawnMsptGateMs = 70.0;
 
     /** 假人总容量 */
-    public int maxVirtualPlayers = 10;
+    public int maxVirtualPlayers = 5;
 
     /** 任何时刻最少保持在线的假人数 */
     public int minVirtualPlayers = 4;
@@ -218,7 +218,13 @@ public class MaohiConfig {
 		if (roll >= 100 - sessionLongPercent) {
 			return randMinutesMs(sessionLongMinMinutes, sessionLongMaxMinutes);
 		}
-		return randMinutesMs(sessionMinMinutes, sessionMaxMinutes);
+		// V5.88: 周末常规会话时长 ×2（min 120→240, max 240→480）—— 真人周末玩得更久。
+		//   仅作用于"常规段"(98%);短/长段保持不变。周末判定与 VPM.updateTargetCount 同口径。
+		java.time.DayOfWeek today = java.time.LocalDate.now().getDayOfWeek();
+		boolean weekend = (today == java.time.DayOfWeek.SATURDAY || today == java.time.DayOfWeek.SUNDAY);
+		int normalMin = weekend ? sessionMinMinutes * 2 : sessionMinMinutes;
+		int normalMax = weekend ? sessionMaxMinutes * 2 : sessionMaxMinutes;
+		return randMinutesMs(normalMin, normalMax);
 	}
 
 	private static long randMinutesMs(int minMin, int maxMin) {

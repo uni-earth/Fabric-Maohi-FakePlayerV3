@@ -37,11 +37,13 @@ public final class PlantSeedTrigger implements AchievementTrigger {
 	public String advancementId() { return ADV_ID; }
 
 	@Override
-	public long[] nextIntervalRange() { return new long[]{20_000L, 90_000L}; } // 20s~90s
+	public long[] nextIntervalRange() { return new long[]{15_000L, 60_000L}; } // V5.88: 15s~60s，更频繁地耕种
 
 	@Override
 	public boolean shouldRun(ServerPlayerEntity player, Personality personality) {
-		if (TriggerUtil.alreadyUnlocked(personality, ADV_ID)) return false;
+		// V5.88: 移除 alreadyUnlocked 守门——成就只是第一次的奖励，此后继续耕种扩大农场。
+		//   真人每次路过草地都会顺手开几块耕地种种子；假人也应持续农耕。
+		//   背包有种子 + 有锄头 + 主世界 → 继续触发（没种子/锄头时 tryTrigger 自然 return false）。
 		return player.getEntityWorld().getRegistryKey() == net.minecraft.world.World.OVERWORLD;
 	}
 

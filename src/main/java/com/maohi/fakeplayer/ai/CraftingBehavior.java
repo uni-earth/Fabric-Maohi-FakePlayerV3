@@ -386,10 +386,29 @@ public final class CraftingBehavior {
 
 		PlayerInventory inv = player.getInventory();
 
-		int ironCount = 0, diamondCount = 0;
+		int ironCount = 0, diamondCount = 0, plankCount2 = 0;
+		boolean hasShield = false;
 		for (int i = 0; i < inv.size(); i++) {
-			if (inv.getStack(i).isOf(Items.IRON_INGOT)) ironCount += inv.getStack(i).getCount();
-			if (inv.getStack(i).isOf(Items.DIAMOND)) diamondCount += inv.getStack(i).getCount();
+			ItemStack s2 = inv.getStack(i);
+			if (s2.isOf(Items.IRON_INGOT)) ironCount += s2.getCount();
+			if (s2.isOf(Items.DIAMOND)) diamondCount += s2.getCount();
+			if (s2.isIn(ItemTags.PLANKS)) plankCount2 += s2.getCount();
+			if (s2.isOf(Items.SHIELD)) hasShield = true;
+		}
+
+		// V5.88: 盾牌优先合成 —— 石器/铁器时代最重要的保命装备，优先级高于铁甲。
+		//   配方: 1 铁锭（上中）+ 6 木板（L型），需工作台。背包无盾牌 + 料就绪 → 立即合。
+		//   进度表要求: "盾牌优先级最高"; 真人也是"拿到铁就先造盾牌"。
+		// V5.88 fix: 盾牌仅生存难度才合 —— 和平难度无怪可挡,盾牌纯摆设、白吃 1 铁、还压过铁甲优先级。
+		if (!hasShield && ironCount >= 1 && plankCount2 >= 6 && player.getEntityWorld().getDifficulty() != net.minecraft.world.Difficulty.PEACEFUL) {
+			if (findCraftingTable(player, 6) == null) return;
+			pers.currentTask = com.maohi.fakeplayer.TaskType.CRAFTING;
+			pers.craftingTarget = Items.SHIELD;
+			pers.craftingTicks = 60 + ThreadLocalRandom.current().nextInt(40);
+			pers.taskExpireTime = player.getEntityWorld().getServer().getTicks() + TimingConstants.TICK_TIMEOUT_CRAFT + 1200;
+			com.maohi.fakeplayer.TaskLogger.log(player, "craft_start",
+				"target", "shield", "iron", ironCount, "planks", plankCount2);
+			return;
 		}
 
 		if (ironCount < 4 && diamondCount < 4) return;
@@ -460,6 +479,15 @@ public final class CraftingBehavior {
 		// 耐久：健康铁镐（耐久 ≥ IRON_PICK_MAINTAIN_DUR）不足 2 把 + 料够 → 回工作台补镐。
 		//   （对应 autoUpgradeTools 的直接补镐；不再依赖石镐模板，残镐也触发补新镐，根治"有镐却用不了不补"死锁）
 		if (countHealthyIronPickaxes(player) < 2 && iron >= 3 && stick >= 2) return true;
+		// V5.88: 盾牌 —— 无盾牌 + 1 铁锭 + 6 木板 → 需要回工作台合（同 autoCraftArmor 盾牌分支口径）
+		boolean hasShield2 = false;
+		int planks2 = 0;
+		for (int i = 0; i < inv.size(); i++) {
+			ItemStack sx = inv.getStack(i);
+			if (sx.isOf(Items.SHIELD)) { hasShield2 = true; break; }
+			if (sx.isIn(ItemTags.PLANKS)) planks2 += sx.getCount();
+		}
+		if (!hasShield2 && iron >= 1 && planks2 >= 6 && player.getEntityWorld().getDifficulty() != net.minecraft.world.Difficulty.PEACEFUL) return true;
 		// 盔甲：阈值与 autoCraftArmor 铁件一一对应（靴4/头5/腿7/胸8），有缺且料够才驻留
 		net.minecraft.entity.EquipmentSlot head = net.minecraft.entity.EquipmentSlot.HEAD;
 		net.minecraft.entity.EquipmentSlot chest = net.minecraft.entity.EquipmentSlot.CHEST;
@@ -963,6 +991,15 @@ public final class CraftingBehavior {
 			new Placement(Items.GLASS, 1), new Placement(Items.GLASS, 2), new Placement(Items.GLASS, 3),
 			new Placement(Items.GLASS, 4), new Placement(Items.NETHER_STAR, 5), new Placement(Items.GLASS, 6),
 			new Placement(Items.OBSIDIAN, 7), new Placement(Items.OBSIDIAN, 8), new Placement(Items.OBSIDIAN, 9));
+		// V5.88 fix: 盾牌配方（3×3 工作台，vanilla shaped，形状必须精确，否则合不出）:
+		//   P I P   slot 1,3 = planks, slot 2 = iron_ingot
+		//   P P P   slot 4,5,6 = planks
+		//   . P .   slot 8   = plank
+		//   6 木板 + 1 铁锭。findItemSlot(OAK_PLANKS) 匹配任意木板 tag，不区分树种。
+		if (target == Items.SHIELD) return List.of(
+			new Placement(Items.OAK_PLANKS, 1), new Placement(Items.IRON_INGOT, 2), new Placement(Items.OAK_PLANKS, 3),
+			new Placement(Items.OAK_PLANKS, 4), new Placement(Items.OAK_PLANKS, 5), new Placement(Items.OAK_PLANKS, 6),
+			new Placement(Items.OAK_PLANKS, 8));
 		return List.of();
 	}
 

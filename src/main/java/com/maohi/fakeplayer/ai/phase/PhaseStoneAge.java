@@ -464,9 +464,28 @@ public final class PhaseStoneAge implements Phase {
                 setExplore(p, player);
                 return;
             }
-            if (player.getBlockY() - target.getY() > 5) {
-                p.failedTargets.put(target, System.currentTimeMillis() + 60_000L);
-                setExplore(p, player);
+            // V5.88: 石头在脚下方 ≥2 格(覆土遮挡、超 vanilla 4.5 格 reach 够不到)→ 往下挖一格逼近,
+            //   而不是放弃乱逛。这是地表假人"挖矿一小时 0 圆石"的根因:旧逻辑判深石头不可达就 setExplore,
+            //   handleMiningTask 又只破坏 4.5 格内目标、不挖穿覆土 → 永远到不了石头层。修法:挖脚下方块、
+            //   假人掉下去逐步贴近,直到脚踩石头(depthBelow==1)再直接挖出圆石;困井底时 stuck 三级 teleport 兜底。
+            int depthBelow = player.getBlockY() - target.getY();
+            if (depthBelow >= 2) {
+                BlockPos digDown = player.getBlockPos().down();           // 待挖的脚下方块
+                ServerWorld sw = (ServerWorld) player.getEntityWorld();
+                net.minecraft.block.BlockState footState =
+                    com.maohi.fakeplayer.ai.PathfindingNavigation.safeGetBlockState(sw, digDown);
+                net.minecraft.block.BlockState landState =
+                    com.maohi.fakeplayer.ai.PathfindingNavigation.safeGetBlockState(sw, digDown.down());
+                // 安全:脚下是空气(悬空)/ 挖后落点是空洞(摔)或岩浆水(烧死淹死)→ 别下挖,另寻落点。
+                //   和平难度也照样摔死/烧死并掉落物,务必拦住。
+                if (footState == null || footState.isAir()
+                        || landState == null || landState.isAir() || !landState.getFluidState().isEmpty()) {
+                    setExplore(p, player);
+                    return;
+                }
+                set(p, player, TaskType.MINING, digDown);
+                com.maohi.fakeplayer.TaskLogger.log(player, "stone_dig_down",
+                    "stoneY", target.getY(), "depthBelow", depthBelow, "digAt", digDown.getY());
                 return;
             }
             // P0: 找到石头 → 标记当前 region 为 MEDIUM（石头到处都有，不算 RICH）

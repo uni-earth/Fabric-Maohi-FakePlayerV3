@@ -42,11 +42,19 @@ public final class SleepInBedTrigger implements AchievementTrigger {
 
 	@Override
 	public boolean shouldRun(ServerPlayerEntity player, Personality personality) {
-		if (TriggerUtil.alreadyUnlocked(personality, ADV_ID)) return false;
 		World world = player.getEntityWorld();
 		// 主世界 + 黑夜才睡——白天 vanilla 拒绝睡眠
 		if (world.getRegistryKey() != World.OVERWORLD) return false;
-		return world.isNight();
+		if (!world.isNight()) return false;
+		// V5.88: 移除 alreadyUnlocked 守门——成就只是第一次的奖励，此后每晚都应睡觉。
+		//   真人每晚都铺床睡觉跳过黑夜；假人也应如此（用床消耗由 autoCraftStoneTools 步11 自动补）。
+		//   背包有床或附近有现成床时才触发，没有床时 tryTrigger 自然 return false，不会死循环。
+		// V5.88 fix: 但和平难度无夜间危险/不刷幻翼,深层挖矿假人每晚长途跑回床睡纯属浪费 →
+		//   和平难度只为成就睡一次(alreadyUnlocked 守门),生存难度才每晚睡。
+		if (world.getDifficulty() == net.minecraft.world.Difficulty.PEACEFUL && TriggerUtil.alreadyUnlocked(personality, ADV_ID)) return false;
+		int bedSlot = findBedSlot(player.getInventory());
+		if (bedSlot != -1) return true;  // 背包有床 → 直接可放
+		return findExistingBed(player, 10) != null;  // 附近有现成床 → 可交互
 	}
 
 	@Override
