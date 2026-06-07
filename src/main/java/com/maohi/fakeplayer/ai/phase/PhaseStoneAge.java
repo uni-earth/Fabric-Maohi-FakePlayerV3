@@ -340,6 +340,33 @@ public final class PhaseStoneAge implements Phase {
                 }
                 // ── END SA-P1~P6 ──
 
+                // ── V5.87: 主动合装备驱动(裸奔/无武器修复)—— 仿 PhaseIronAge P4.5,不靠"碰巧贴台" ──
+                //   hasPendingGearCraft 对石器假人 = 「没剑 + cobble≥3 + stick≥1 → 合石剑」(铁条件天然 false)。
+                //   有料没剑就主动回台/驻留让 autoCraftStoneTools 步6 合;合出后条件转 false 自动退出
+                //   (不循环、不会永久挡住 strip-mine)。有铁后由 PhaseIronAge P4.5 接管铁剑/铁甲/备用铁镐。
+                if (com.maohi.fakeplayer.ai.CraftingBehavior.hasPendingGearCraft(player)) {
+                    BlockPos gearBench = (personality.knownWorkbenchPos != null)
+                        ? personality.knownWorkbenchPos
+                        : PhaseIronAge.findCraftingTable((ServerWorld) player.getEntityWorld(),
+                            player.getBlockPos(), WORKBENCH_RETURN_RADIUS);
+                    if (gearBench != null) {
+                        double gearDistSq = player.getBlockPos().getSquaredDistance(gearBench);
+                        // 仅当台在合理距离内才回走;太远(>64格,深井寻路不可靠)落到下面正常流程,
+                        //   砍树攒 plank → autoCraftStoneTools 自建近台 → 下轮再合。
+                        if (gearDistSq <= 64.0 * 64.0) {
+                            if (gearDistSq > WORKBENCH_NEARBY_SQ) {
+                                set(personality, player, TaskType.RETURN_TO_BASE, gearBench);
+                                com.maohi.fakeplayer.TaskLogger.log(player, "stone_gear_return",
+                                    "bench", gearBench, "distSq", (int) gearDistSq);
+                            } else {
+                                setIdle(personality, player, 100);
+                                com.maohi.fakeplayer.TaskLogger.log(player, "stone_gear_park", "bench", gearBench);
+                            }
+                            return;
+                        }
+                    }
+                }
+
                 com.maohi.MaohiConfig cfg = com.maohi.MaohiConfig.getInstance();
                 if (cfg != null && cfg.enableStripMine) {
                     long now = System.currentTimeMillis();

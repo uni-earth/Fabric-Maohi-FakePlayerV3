@@ -573,7 +573,14 @@ public class BlockPlacer {
 			}
 		}
 		if (furnaceSlot == -1) return;
-		if (furnaceSlot > 8) return; // 同 table:必须先在 hotbar 才能 setSelectedSlot
+		if (furnaceSlot > 8) {
+			// V5.87 FIX: furnace 在背包(slot>8)时镜像 tryPlaceCraftingTable 的挪槽逻辑 —— quickMove
+			//   到快捷栏,下一 tick 再放。原来直接 return 导致 furnace 合出来落进背包就永不放置 →
+			//   炼不了铁 → 卡 STONE_AGE(table 早有此逻辑,furnace 漏了,是"假人不搭炉"的实锤根因)。
+			int screenSlot = InventoryActionHelper.playerInvSlotToScreenSlot(player.playerScreenHandler, furnaceSlot);
+			if (screenSlot >= 0) InventoryActionHelper.quickMove(player, screenSlot);
+			return; // 本 tick 只做移动,下一 tick hotbar 有 furnace 再放置
+		}
 
 		BlockPos foot = player.getBlockPos();
 		Direction[] dirs = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};

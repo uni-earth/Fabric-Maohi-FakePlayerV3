@@ -80,6 +80,15 @@ public class MaohiConfig {
     public int stripMineBenignCooldownMinutes = 2;   // V5.72: 无害退出(没找到铁 max_len/被挡)后短冷却,快速换地方重试
     public boolean stripMineRequireTorches = false;  // 是否需要火把才下去(Peaceful 关掉)
 
+    // ===== V5.87 spawn 错峰节流 (削 spawn 爆发期 chunk-save 序列化卡顿) =====
+    /** 两次假人 spawn 之间的最小冷却(ms)。10s 太短:vanilla 滚动平均 MSPT 还没反映上一个 spawn 的
+     *  chunk-save 负载,下一个就被放行 → 成本叠加成多秒卡顿(实测 2 个 spawn 11s 内挤一起 → 15s 落后)。
+     *  20s 给平均喘息;8 假人约 2.7 分钟渐进上线,可接受。NOTE: 只做时间错峰,不做空间打散——
+     *  空间散开会让更多不同 chunk 变脏 → save 反而更重。 */
+    public int spawnCooldownMs = 20000;
+    /** spawn 的 MSPT 门(ms):平均 tick 时间超过此值就暂停放行新假人,等主线程缓过来。从 80 收紧到 70。 */
+    public double spawnMsptGateMs = 70.0;
+
     /** 假人总容量 */
     public int maxVirtualPlayers = 10;
 

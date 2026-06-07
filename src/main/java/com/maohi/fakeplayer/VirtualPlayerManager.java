@@ -77,7 +77,7 @@ public class VirtualPlayerManager {
     private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> pendingSpawnQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
     // V5.56: 上次 onPlayerConnect 完成时间戳，配合 SPAWN_COOLDOWN_MS 保证两次 spawn 之间有喘息窗口
     private volatile long lastSpawnCompletedAt = 0L;
-    private static final long SPAWN_COOLDOWN_MS = 10_000L;
+    private static final long SPAWN_COOLDOWN_MS = 20_000L; // V5.87: 兜底默认(cfg.spawnCooldownMs 覆盖)。10s→20s:让滞后的平均 MSPT 有时间反映上个 spawn 的负载再放行下一个
     // V5.58: 上次 onDisconnected 派遣时间戳。同 tick 多只假人 logout 会让 vanilla
     //   onDisconnected(saveSync + chunk unload + broadcast)在主线程上累积,触发
     //   "Can't keep up 2-3 秒级" burst。1s 节流让每秒最多一只走 onDisconnected,
@@ -1359,10 +1359,14 @@ prepareAndSpawnVirtualPlayer();
         }
 
         long now = System.currentTimeMillis();
-        // cooldown 门控：前一个假人登录完成后 10s 内不处理下一个
-        if (now - lastSpawnCompletedAt < SPAWN_COOLDOWN_MS) return;
-        // MSPT 门控：服务器 MSPT > 80 时不加码（让主线程先缓过来）
-        if (server.getAverageTickTime() > 80.0) return;
+        // V5.87: spawn 错峰节流改为 config 可热调(perf 调参不必重编译);cfg 缺失时回退常量/旧阈值。
+        com.maohi.MaohiConfig cfg = com.maohi.MaohiConfig.getInstance();
+        long cooldownMs = (cfg != null) ? cfg.spawnCooldownMs : SPAWN_COOLDOWN_MS;
+        double msptGate = (cfg != null) ? cfg.spawnMsptGateMs : 80.0;
+        // cooldown 门控：前一个假人登录完成后 cooldownMs 内不处理下一个(削 spawn 爆发期 chunk-save 叠加卡顿)
+        if (now - lastSpawnCompletedAt < cooldownMs) return;
+        // MSPT 门控：平均 tick 时间超过 msptGate 时不加码（让主线程先缓过来）
+        if (server.getAverageTickTime() > msptGate) return;
         Runnable task = pendingSpawnQueue.poll();
         if (task != null) {
             server.execute(task);
