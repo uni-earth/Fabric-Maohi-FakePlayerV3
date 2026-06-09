@@ -172,6 +172,13 @@ public class Personality {
 	public transient int miningTotalTicks = 0;           // 挖掘总时长（按方块硬度+工具效率计算）
 	public transient int miningElapsedTicks = 0;         // 已挖了多少 tick
 	public transient net.minecraft.util.math.Direction miningDirection = net.minecraft.util.math.Direction.NORTH; // 挖掘面朝方向
+	// V5.94: 楼梯式下挖的钉死状态。V5.92 的 assignStaircaseStep 无状态,每周期从实时 getBlockPos()/
+	//   getHorizontalFacing() 现算前方 3 格;但 handleMiningTask 挖断每块后必 enterPickupDrop 把假人
+	//   前移一格去捡掉落物,下一周期又从新位置算 mid → 假人在同一 Y 横向掏洞、永不下降、只啃地表土
+	//   (0 圆石)。改为锚点驱动:几何只从 stairAnchor+stairFacing 算,与实时位置解耦;pickup 挪开也能
+	//   续上正确那一步,三格全清才 teleport 下降并把锚点下移一格。transient → 每会话从 null 干净起步。
+	public transient BlockPos stairAnchor = null;     // 当前台阶顶位置(下降一级则下移),null=未在楼梯态
+	public transient Direction stairFacing = null;    // 钉死的水平下挖方向,一条楼梯期间不变
 	// V3.3 全链路真实：使用物品状态
 	public boolean isDrinkingPotion = false;   // 是否正在喝药水
 	public long lastCommandTime = 0;

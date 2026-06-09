@@ -506,23 +506,54 @@ public final class PhaseStoneAge implements Phase {
     }
 
     /**
-     * V5.92: 可回爬的「楼梯式下挖」一步，取代 V5.88 直挖竖井(假人困井底爬不出、只能靠 teleport 捞)。
+     * V5.94: 锚点驱动的「楼梯式下挖」一步。取代 V5.92 的无状态实现 —— 后者每周期从实时
+     * {@code getBlockPos()}/{@code getHorizontalFacing()} 现算前方 3 格,但 handleMiningTask 挖断
+     * 每块后必 {@code enterPickupDrop} 把假人前移一格去捡掉落物,下一周期又从新位置算 mid → 假人在
+     * 同一 Y 横向掏洞、永不下降、只啃地表土(0 圆石)。实测 Leo_XD 在线 2.5h 卡 Y112、mined=39 而
+     * cobble=0、stone_stair_dig 恒 step=mid。
      *
-     * <p>朝假人当前水平朝向「前进 1 + 下降 1」:清前方 3 格(脚高 fMid / 头高 fHead / 前下 fDown)，
-     * 要求落脚地面 fFloor 实心非流体。每周期清一块(由 handleMiningTask 在 4.5 格 reach 内破坏)，
-     * 三格皆空后 setMoveTo 走下台阶。留下的台阶每级只高 1 格 —— PathfindingNavigation 的 up(2)
-     * 上爬邻居能让假人采完圆石沿原路走回地表工作台(每级台阶的落脚地面就是上一级校验过的 fFloor，
-     * 始终实心，回爬链不断)。穿过石层时 fMid/fDown 本身就是石头 → 破坏即掉圆石，边下边采。
+     * <p><b>修法</b>:楼梯几何只从 {@link Personality#stairAnchor}(当前台阶顶位置) +
+     * {@link Personality#stairFacing}(钉死的水平方向)算,与实时位置解耦。即便 pickup 把假人挪开,
+     * 下一周期仍从锚点续上正确那一步(mid→head→down 逐格清);三格全清才 {@code requestTeleport} 下降
+     * 一格、把锚点同步下移,继续从更低处开下一级。穿石层时 fMid/fDown 本身是石头 → 破坏即掉圆石、pickup
+     * 当场捡,边下边采。留下的台阶每级只高 1 格 → PathfindingNavigation up(2) 邻居供假人采完爬回地表台。
      *
-     * <p>安全:任一格 chunk 未就绪(safeGetBlockState 返 null)、落脚地面空气(悬空摔)/流体，
-     * 或前方三格含流体(岩浆/水)→ setExplore 另寻，绝不挖进空洞或岩浆(和平难度也照样摔死/烧死并掉落物)。
+     * <p><b>锚点生命周期</b>:首次进入 / 朝向丢失 / 假人漂离锚点(被 stuck-teleport 等挪走 >3 格水平或
+     * >2 格垂直)→ 在当前位置重建锚点、用 {@link #chooseDigFacing} 挑朝向。挑不到可下挖方向(四周落脚
+     * 地面皆空=崖边/悬空)、或安全检查失败 → {@link #clearStairState} 清锚点 + setExplore。离开石头挖矿
+     * (升 STONE_TOOL / phase 变)无需显式清:陈旧锚点若不再贴身,下次进来 drift 重建;若仍贴着旧楼梯,
+     * 直接复用续挖也无害。
+     *
+     * <p><b>安全</b>:任一格 chunk 未就绪(safeGetBlockState 返 null)、落脚地面空气(悬空摔)/流体,
+     * 或前方三格含流体(岩浆/水)→ 清锚点 + setExplore 另寻,绝不挖进空洞或岩浆。
      */
     private static void assignStaircaseStep(ServerPlayerEntity player, Personality p, BlockPos stoneTarget, int depthBelow) {
         ServerWorld sw = (ServerWorld) player.getEntityWorld();
-        net.minecraft.util.math.Direction face = player.getHorizontalFacing();
-        BlockPos pos = player.getBlockPos();
-        BlockPos fMid = pos.offset(face);          // 前方脚高:前进时脚部空间 / 下台阶后头部空间
-        BlockPos fHead = fMid.up();                // 前方头高:前进时头部空间
+        BlockPos botPos = player.getBlockPos();
+
+        // 锚点 (re)init:无锚点 / 朝向丢失 / 假人已漂离楼梯态(stuck-teleport 等大位移)→ 在当前位置重建。
+        //   正常下挖每级只移 1 格水平 + 1 格垂直(远在阈值内),只有外部大位移才触发重建。
+        BlockPos anchor = p.stairAnchor;
+        net.minecraft.util.math.Direction face = p.stairFacing;
+        boolean drifted = anchor != null && (
+                (botPos.getX() - anchor.getX()) * (botPos.getX() - anchor.getX())
+              + (botPos.getZ() - anchor.getZ()) * (botPos.getZ() - anchor.getZ()) > 9
+              || Math.abs(botPos.getY() - anchor.getY()) > 2);
+        if (anchor == null || face == null || drifted) {
+            anchor = botPos;
+            face = chooseDigFacing(player, stoneTarget, anchor);
+            if (face == null) {
+                // 四个水平方向落脚地面皆非实心(崖边/悬空/洞口)→ 放弃此处楼梯,另寻
+                clearStairState(p);
+                setExplore(p, player);
+                return;
+            }
+            p.stairAnchor = anchor;
+            p.stairFacing = face;
+        }
+
+        BlockPos fMid = anchor.offset(face);       // 前方脚高(=锚点 Y):前进脚部空间 / 下台阶后头部空间
+        BlockPos fHead = fMid.up();                // 前方头高
         BlockPos fDown = fMid.down();              // 前方下一格:下台阶后脚部空间
         BlockPos fFloor = fDown.down();            // 下台阶后落脚地面
 
@@ -535,17 +566,18 @@ public final class PhaseStoneAge implements Phase {
         net.minecraft.block.BlockState floorState =
             com.maohi.fakeplayer.ai.PathfindingNavigation.safeGetBlockState(sw, fFloor);
 
-        // 任一格 chunk 未就绪(null)→ 不挖;落脚地面非实心/流体、或前方三格含流体 → setExplore 另寻
+        // 任一格 chunk 未就绪(null)→ 不挖;落脚地面非实心/流体、或前方三格含流体 → 清锚点 + setExplore 另寻
         if (midState == null || headState == null || downState == null || floorState == null
                 || floorState.isAir() || !floorState.getFluidState().isEmpty()
                 || !midState.getFluidState().isEmpty()
                 || !headState.getFluidState().isEmpty()
                 || !downState.getFluidState().isEmpty()) {
+            clearStairState(p);
             setExplore(p, player);
             return;
         }
 
-        // 逐格开台阶(每周期一块):脚高 → 头高 → 前下
+        // 逐格开台阶(每周期一块,从锚点算 → pickup 挪开也不丢步):脚高 → 头高 → 前下
         if (!midState.isAir()) {
             set(p, player, TaskType.MINING, fMid);
             com.maohi.fakeplayer.TaskLogger.log(player, "stone_stair_dig",
@@ -564,13 +596,58 @@ public final class PhaseStoneAge implements Phase {
                 "step", "down", "at", fDown.getY(), "stoneY", stoneTarget.getY(), "depthBelow", depthBelow);
             return;
         }
-        // 三格皆空、落脚实心 → 下台阶 1 格。requestTeleport 可靠下降(镜像 StripMineBehavior.tickDescend,
-        //   不依赖近距 setMoveTo 的到达判定，避免"台阶清完却没走下去"原地空转);落到前进列 fMid 的水平位置、
-        //   fDown 的高度，正好站上已校验实心的 fFloor。留下的 1 高台阶由 PathfindingNavigation up(2) 邻居供回爬。
-        player.requestTeleport(fMid.getX() + 0.5, fDown.getY(), fMid.getZ() + 0.5);
-        setIdle(p, player, 20);   // 下降后短驻留，下个 assign 周期从新(更低)位置重新评估:继续下挖 or 采到圆石转 STONE_TOOL
+
+        // 三格皆空、落脚实心 → 下台阶 1 格 + 锚点同步下移到落脚点(下个周期从更低锚点开下一级)。
+        //   requestTeleport 可靠下降(镜像 StripMineBehavior.tickDescend,不依赖近距到达判定);落到前进列
+        //   fMid 的水平位置、fDown 的高度,正好站上已校验实心的 fFloor。朝向 face 不变 → 一条直线斜下楼梯。
+        BlockPos landed = new BlockPos(fMid.getX(), fDown.getY(), fMid.getZ());
+        player.requestTeleport(landed.getX() + 0.5, landed.getY(), landed.getZ() + 0.5);
+        p.stairAnchor = landed;   // 锚点下移;face 保持不变
+        setIdle(p, player, 20);   // 下降后短驻留,下个 assign 周期从新(更低)锚点重新评估:继续下挖 or 采到圆石转 STONE_TOOL
         com.maohi.fakeplayer.TaskLogger.log(player, "stone_stair_step",
-            "to", fDown, "depthBelow", depthBelow);
+            "to", landed, "depthBelow", depthBelow);
+    }
+
+    /**
+     * V5.94: 为楼梯下挖挑一个钉死的水平方向。优先朝石头目标的水平分量(把楼梯挖进资源),
+     * 但要求「该方向下一级台阶的落脚地面实心非流体」—— 否则是崖边/悬空/洞口,下去会摔/掉空。
+     * 优先方向不满足时依次试另外三个水平方向;四个都不行返 null(调用方放弃、另寻)。
+     */
+    private static net.minecraft.util.math.Direction chooseDigFacing(
+            ServerPlayerEntity player, BlockPos stoneTarget, BlockPos anchor) {
+        ServerWorld sw = (ServerWorld) player.getEntityWorld();
+        int dx = stoneTarget.getX() - anchor.getX();
+        int dz = stoneTarget.getZ() - anchor.getZ();
+        net.minecraft.util.math.Direction preferred;
+        if (dx == 0 && dz == 0) {
+            preferred = player.getHorizontalFacing();   // 石头正下方,无水平分量 → 用当前朝向
+        } else if (Math.abs(dx) >= Math.abs(dz)) {
+            preferred = dx >= 0 ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST;
+        } else {
+            preferred = dz >= 0 ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH;
+        }
+        if (hasSolidLanding(sw, anchor, preferred)) return preferred;
+        for (net.minecraft.util.math.Direction d : new net.minecraft.util.math.Direction[]{
+                net.minecraft.util.math.Direction.NORTH, net.minecraft.util.math.Direction.SOUTH,
+                net.minecraft.util.math.Direction.EAST, net.minecraft.util.math.Direction.WEST}) {
+            if (d == preferred) continue;
+            if (hasSolidLanding(sw, anchor, d)) return d;
+        }
+        return null;
+    }
+
+    /** V5.94: 锚点朝 d 下一级台阶的落脚地面(anchor.offset(d).down().down())实心非流体? chunk 未就绪返 false。 */
+    private static boolean hasSolidLanding(ServerWorld sw, BlockPos anchor, net.minecraft.util.math.Direction d) {
+        BlockPos fFloor = anchor.offset(d).down().down();
+        net.minecraft.block.BlockState s =
+            com.maohi.fakeplayer.ai.PathfindingNavigation.safeGetBlockState(sw, fFloor);
+        return s != null && !s.isAir() && s.getFluidState().isEmpty();
+    }
+
+    /** V5.94: 清空楼梯锚点状态(安全 bail / 挑不到方向时调用,下次进来从当前位置重建)。 */
+    private static void clearStairState(Personality p) {
+        p.stairAnchor = null;
+        p.stairFacing = null;
     }
 
     /**
