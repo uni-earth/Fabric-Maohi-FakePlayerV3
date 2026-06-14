@@ -335,6 +335,8 @@ public final class PhaseStoneAge implements Phase {
                     //   反复 park 60tick 不前进。原木/木板都是有效燃料(SmeltingBehavior 同口径);
                     //   煤/木炭(strip-mine 顺手挖到)也算 → 有燃料则跳过本步直奔熔炉。
                     if (!com.maohi.fakeplayer.ai.SmeltingBehavior.hasSmeltFuel(player)) {
+                        // V5.111: 缺燃料要砍树,但深处砍不到 → 先柱式上爬到地表(同冶炼滞留逃生)。
+                        if (ascendToSurfaceIfDeep(player, personality, d.cobbleCount)) return;
                         com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_need_fuel",
                             "logs", d.logCount, "planks", d.plankCount, "rawIron", d.rawIronCount);
                         assignChopTree(player, personality, ctx);
@@ -353,6 +355,33 @@ public final class PhaseStoneAge implements Phase {
                                 com.maohi.fakeplayer.ai.cognition.SharedResourceMap.LandmarkType.FURNACE,
                                 found, player.getUuid());
                         }
+                    }
+
+                    // ── V5.111/V5.113 深处冶炼滞留逃生(两步)──
+                    //   病象1(DiamondDig):STONE_STABLE 生铁+332圆石,缺木料建炉 → assignChopTree → 地下 findLog
+                    //     恒 null → setExplore → explore_pull_home 把目标 Y 钳在洞里 → moved30s=0 → expired ♾。
+                    //   病象2(Leo):已知炉在脚下方 y15(dy-52),自己在地表 y67 → RETURN_TO_BASE 永远走不到那口
+                    //     深井残留炉 → moved30s=0 卡死(实测 13h 一锭未熔)。
+                    //   (a) V5.113 先忘掉「脚下方 >10 格且不在 park 范围」的深井残留炉(清 knownFurnacePos)——
+                    //       绝不死磕够不到的远炉。清后:地表 bot 落到下面"无炉"分支 SA-P4/P6 就地建新炉;
+                    //       深处 bot 接 (b) 上爬。findFurnace 已在上方跑过,清空后本轮不再重扫,下轮深井炉超 24 格也不会回扫。
+                    if (saFurnace != null
+                            && saFurnace.getY() < player.getBlockY() - 10
+                            && player.getBlockPos().getSquaredDistance(saFurnace) > 25.0) {
+                        com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_forget_deep_furnace",
+                            "furnace", saFurnace, "botY", player.getBlockY());
+                        personality.knownFurnacePos = null;
+                        saFurnace = null;
+                    }
+                    //   (b) V5.111 清炉后仍「无炉可用 + 缺木料建炉 + 身处地下」→ 用兜里圆石柱式上爬回地表
+                    //       (tickAscend 垫脚不靠地形导航),到地表 findLog/建台炉/地表炉都恢复。复用 V5.109 ASCEND。
+                    //       地表 bot(ascendToSurfaceIfDeep 返 false)不在此列 → 落到下面就地建新炉。
+                    //       贴身有炉(下面 SA-P1 ≤5格 park 熔)不受影响。
+                    if (saFurnace == null && !d.hasTable && d.plankCount < 4 && d.logCount < 1
+                            && ascendToSurfaceIfDeep(player, personality, d.cobbleCount)) {
+                        com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_ascend",
+                            "reason", "no_furnace_cant_build", "rawIron", d.rawIronCount, "cobble", d.cobbleCount);
+                        return;
                     }
 
                     if (saFurnace != null) {
@@ -603,6 +632,40 @@ public final class PhaseStoneAge implements Phase {
             p.regionMemory.mark(rx, rz, com.maohi.fakeplayer.ai.cognition.RegionScore.EMPTY, false);
             setExplore(p, player);
         }
+    }
+
+    /**
+     * V5.111: 深处「够不到地表设施」滞留逃生 —— 用兜里圆石柱式上爬回地表
+     * ({@link com.maohi.fakeplayer.ai.StripMineBehavior#tickAscend} 垫脚,不靠地形导航,见天即停)。
+     *
+     * <p>破死锁:深处 STONE_STABLE 假人有生铁要熔却缺木料建炉(或已知炉在深处够不到)时,原路径
+     * {@code assignChopTree → 地下 findLog 恒 null → setExplore → explore_pull_home 钳 Y 在洞里 →
+     * moved30s=0 → task_fail expired} 无限空转(实测 54min 0 锭)。上到地表后 findLog/建台炉/地表炉
+     * 全恢复。复用 V5.109 got_iron→ASCEND 同一套机制。
+     *
+     * @param cobbleCount 背包圆石数(垫脚料);&lt; 8 不触发(爬不动,落回调用方原流程)。
+     * @return true=已接管进入 ASCEND(调用方须立即 return);false=未触发(非地下/无圆石/已在 strip-mine 态)。
+     */
+    private static boolean ascendToSurfaceIfDeep(ServerPlayerEntity player, Personality p, int cobbleCount) {
+        com.maohi.MaohiConfig cfg = com.maohi.MaohiConfig.getInstance();
+        if (cfg == null || !cfg.enableStripMine) return false;
+        if (p.stripMineState != null) return false;     // 已在 strip-mine 态,不打断
+        if (cobbleCount < 8) return false;               // 没圆石垫脚,爬不上去 → 落回原流程
+        ServerWorld w = (ServerWorld) player.getEntityWorld();
+        // NO_LEAVES heightmap:树下站立的地表 bot 读脚下地面(diff≈0)不误判;洞里才有大 diff。
+        //   走 getChunkIfReady,Worker-1 线程安全;chunk 未就绪返 fallbackY=botY → diff=0 → 判非地下。
+        int surfaceY = com.maohi.fakeplayer.ai.PathfindingNavigation.getSafeSpawnY(
+            w, player.getBlockX(), player.getBlockZ(), player.getBlockY());
+        if (surfaceY - player.getBlockY() <= 10) return false;   // 不算地下
+        p.stripMineState = SubPhase.STRIP_MINE_ASCEND;
+        p.currentTask = TaskType.STRIP_MINE;
+        // startY 设到真实地表 +3 → tickAscend 完成判据 y>=startY-3 落在地表;isSkyVisible 同样在地表触发。
+        //   不能用 botY+常数:极深(botY 大负数)时 y>=startY-3 会过早截断,假人仍卡地下。
+        p.stripMineStartY = surfaceY + 3;
+        p.stripMineConsecutiveFails = 0;
+        com.maohi.fakeplayer.TaskLogger.log(player, "ascend_to_surface",
+            "botY", player.getBlockY(), "surfaceY", surfaceY, "cobble", cobbleCount);
+        return true;
     }
 
     private static void assignMineStone(ServerPlayerEntity player, Personality p, PhaseContext ctx) {

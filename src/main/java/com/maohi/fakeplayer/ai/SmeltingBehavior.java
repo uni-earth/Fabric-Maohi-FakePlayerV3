@@ -3,6 +3,8 @@ package com.maohi.fakeplayer.ai;
 import com.maohi.fakeplayer.Personality;
 import com.maohi.fakeplayer.network.InventoryActionHelper;
 import com.maohi.fakeplayer.network.PacketHelper;
+import com.maohi.mixin.PlayerInventoryAccessor;
+import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Item;
@@ -150,18 +152,10 @@ public final class SmeltingBehavior {
 
 	private static boolean placeIngredientsInFurnace(ServerPlayerEntity player, BlockPos furnace,
 	                                                 int rawIronInvSlot, int fuelInvSlot) {
-		// 朝熔炉看 + 真实 interactBlock 包打开 GUI
-		Vec3d center = Vec3d.ofCenter(furnace);
-		facePoint(player, center);
-		BlockHitResult hit = new BlockHitResult(center, Direction.UP, furnace, false);
-		PacketHelper.interactBlock(player, Hand.MAIN_HAND, hit);
-		PacketHelper.swingHand(player, Hand.MAIN_HAND);
-
-		// 校验 FurnaceScreenHandler 已开启
-		if (!(player.currentScreenHandler instanceof FurnaceScreenHandler handler)) {
-			if (player.currentScreenHandler != player.playerScreenHandler) {
-				InventoryActionHelper.closeScreen(player);
-			}
+		FurnaceScreenHandler handler = openFurnaceScreen(player, furnace);
+		if (handler == null) {
+			com.maohi.fakeplayer.TaskLogger.log(player, "smelt_fail",
+				"reason", "screen_not_opened", "furnace", furnace);
 			return false;
 		}
 
@@ -169,29 +163,95 @@ public final class SmeltingBehavior {
 		int fuelScreenSlot = InventoryActionHelper.playerInvSlotToScreenSlot(handler, fuelInvSlot);
 		if (rawIronScreenSlot < 0 || fuelScreenSlot < 0) {
 			InventoryActionHelper.closeScreen(player);
+			com.maohi.fakeplayer.TaskLogger.log(player, "smelt_fail",
+				"reason", "slot_map_failed", "rawSlot", rawIronScreenSlot, "fuelSlot", fuelScreenSlot);
 			return false;
 		}
 
-		// 摆 1 raw_iron → input slot 0
+		// 摆 1 raw_iron → input slot 0,1 fuel → fuel slot 1
 		InventoryActionHelper.moveOneToHandlerSlot(player, rawIronScreenSlot, 0);
-		// 摆 1 fuel → fuel slot 1
 		InventoryActionHelper.moveOneToHandlerSlot(player, fuelScreenSlot, 1);
 
+		// V5.112: 关界面前验证原料真进了炉输入槽(slot 0)。否则 moveOne 静默失败仍 return true →
+		//   pers.smeltingTicks 空等 200 tick → collect 空炉 → 永远 0 锭却看似"在熔"。
+		boolean inputLoaded = !handler.getSlot(0).getStack().isEmpty();
 		InventoryActionHelper.closeScreen(player);
+		if (!inputLoaded) {
+			com.maohi.fakeplayer.TaskLogger.log(player, "smelt_fail",
+				"reason", "input_not_loaded", "furnace", furnace);
+			return false;
+		}
 		return true;
 	}
 
-	private static void collectFromFurnace(ServerPlayerEntity player, BlockPos furnace) {
+	/**
+	 * V5.112: 为假人打开熔炉 GUI —— 完整复刻 {@link com.maohi.fakeplayer.ai.CraftingBehavior} 里
+	 *   executeCraft 已验证「能成」的开窗序列(假人合石镐/石剑正是走这套)。
+	 *
+	 *   <p><b>关键 step 0</b>:先切到空手槽。手持方块(如背包 160 圆石)时 vanilla 走 item 的
+	 *   useOnBlock 去放方块、而非 block 的 onUse 开窗(合成链实测因手持 plank 卡 screen_not_opened 21min)。
+	 *   step1 发包 → step2 服务端直调 interactBlock(绕开发包层 teleport/reach 校验,假人无真客户端 ack
+	 *   teleport 时发包路径会被丢)→ step3 直接 openHandledScreen 兜底(熔炉 BE 自身即 NamedScreenHandlerFactory)。
+	 *
+	 *   <p>旧实现只发包一发 → 假人 GUI 永不打开 → place_ingredients_failed 热自旋,熔炼链整条从未跑通,
+	 *   是石器→铁器长期卡死的总根因。见 memory [[fakeplayer_block_gui_interact]]。
+	 *
+	 *   @return 开启的 FurnaceScreenHandler;失败返 null(已恢复手槽 + 关掉可能残留的非玩家界面)。
+	 */
+	private static FurnaceScreenHandler openFurnaceScreen(ServerPlayerEntity player, BlockPos furnace) {
+		ServerWorld world = player.getEntityWorld();
 		Vec3d center = Vec3d.ofCenter(furnace);
 		facePoint(player, center);
+
+		// step 0: 切到空 hotbar 槽,避免手持方块触发 useOnBlock 放置而非 onUse 开窗
+		PlayerInventory inv = player.getInventory();
+		int originalSlot = ((PlayerInventoryAccessor) inv).getSelectedSlot();
+		int safeSlot = -1;
+		for (int i = 0; i < 9; i++) {
+			if (inv.getStack(i).isEmpty()) { safeSlot = i; break; }
+		}
+		if (safeSlot != -1 && safeSlot != originalSlot) {
+			PacketHelper.setSelectedSlot(player, safeSlot);
+		}
+
 		BlockHitResult hit = new BlockHitResult(center, Direction.UP, furnace, false);
+
+		// step 1: 发包模拟真实客户端
 		PacketHelper.interactBlock(player, Hand.MAIN_HAND, hit);
 		PacketHelper.swingHand(player, Hand.MAIN_HAND);
 
-		if (!(player.currentScreenHandler instanceof FurnaceScreenHandler handler)) {
-			if (player.currentScreenHandler != player.playerScreenHandler) {
-				InventoryActionHelper.closeScreen(player);
-			}
+		// step 2: 未开 → 服务端直调 interactionManager(绕开发包层 reach/teleport 校验)
+		if (!(player.currentScreenHandler instanceof FurnaceScreenHandler)) {
+			ItemStack handStack = player.getStackInHand(Hand.MAIN_HAND);
+			player.interactionManager.interactBlock(player, world, handStack, Hand.MAIN_HAND, hit);
+		}
+
+		// step 3: 还没开 → 直接 openHandledScreen(跳过 vanilla 入口)
+		if (!(player.currentScreenHandler instanceof FurnaceScreenHandler) && isFurnaceBlock(world, furnace)) {
+			BlockState fState = world.getBlockState(furnace);
+			net.minecraft.screen.NamedScreenHandlerFactory factory =
+				fState.createScreenHandlerFactory(world, furnace);
+			if (factory != null) player.openHandledScreen(factory);
+		}
+
+		// 切回原槽(在用料前完成,避免影响后续 srcInvSlot / 摆料)
+		if (safeSlot != -1 && safeSlot != originalSlot) {
+			PacketHelper.setSelectedSlot(player, originalSlot);
+		}
+
+		if (player.currentScreenHandler instanceof FurnaceScreenHandler handler) {
+			return handler;
+		}
+		// 开窗失败:若开了别的非玩家界面则关掉,避免残留
+		if (player.currentScreenHandler != player.playerScreenHandler) {
+			InventoryActionHelper.closeScreen(player);
+		}
+		return null;
+	}
+
+	private static void collectFromFurnace(ServerPlayerEntity player, BlockPos furnace) {
+		// V5.112: 复用 openFurnaceScreen 的完整开窗序列(切空手槽 + 发包 + 直调 + openHandledScreen 兜底)。
+		if (openFurnaceScreen(player, furnace) == null) {
 			com.maohi.fakeplayer.TaskLogger.log(player, "smelt_fail",
 				"reason", "screen_not_opened", "furnace", furnace);
 			return;

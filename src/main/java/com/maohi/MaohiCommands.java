@@ -614,7 +614,7 @@ public class MaohiCommands {
         //   新增装甲列: 4 装备槽材质集合 + getArmor() 总防,单材质 "铁(15防)"、多材质 "铁/金混(8防)"。
         //   新增武备列: 剑/[弓 仅有时显]/镐,消化掉原 "镐:" 列。
         int logs=0, planks=0, sticks=0, cobble=0;
-        int coal=0, iron=0, gold=0, diamond=0, netherite=0;
+        int coal=0, rawIron=0, ironIngot=0, gold=0, diamond=0, netherite=0;
         String pickCn = "无", swordCn = "无";
         // 等级 10×:wood=10 / gold=15 / stone=20 / iron=30 / diamond=40 / netherite=50。
         //   10× 而非 1-5 是为了给 gold 留 1.5 档(攻速/durability 介于木与石之间,真人不爱用但 bot 可能合)。
@@ -633,10 +633,11 @@ public class MaohiCommands {
                 else if (it == net.minecraft.item.Items.STICK)           sticks += n;
                 else if (it == net.minecraft.item.Items.COBBLESTONE
                       || it == net.minecraft.item.Items.COBBLED_DEEPSLATE) cobble += n;
-                // V5.48 矿物战略资源(含生矿,与冶炼前后通算)
+                // V5.48 矿物战略资源
                 else if (it == net.minecraft.item.Items.COAL)            coal += n;
-                else if (it == net.minecraft.item.Items.IRON_INGOT
-                      || it == net.minecraft.item.Items.RAW_IRON)        iron += n;
+                // NOTE: 粗铁与铁锭分开统计，用途完全不同(粗铁需冶炼，铁锭可直接合成)
+                else if (it == net.minecraft.item.Items.RAW_IRON)        rawIron += n;
+                else if (it == net.minecraft.item.Items.IRON_INGOT)      ironIngot += n;
                 else if (it == net.minecraft.item.Items.GOLD_INGOT
                       || it == net.minecraft.item.Items.RAW_GOLD)        gold += n;
                 else if (it == net.minecraft.item.Items.DIAMOND)         diamond += n;
@@ -666,7 +667,8 @@ public class MaohiCommands {
         if (netherite > 0) rsb.append("合金").append(netherite).append(' ');
         if (diamond   > 0) rsb.append("钻石").append(diamond).append(' ');
         if (gold      > 0) rsb.append("金").append(gold).append(' ');
-        if (iron      > 0) rsb.append("铁").append(iron).append(' ');
+        if (ironIngot > 0) rsb.append("铁锭").append(ironIngot).append(' ');
+        if (rawIron   > 0) rsb.append("粗铁").append(rawIron).append(' ');
         if (coal      > 0) rsb.append("煤").append(coal).append(' ');
         if (cobble    > 0) rsb.append("圆石").append(cobble).append(' ');
         if (logs      > 0) rsb.append("原木").append(logs).append(' ');

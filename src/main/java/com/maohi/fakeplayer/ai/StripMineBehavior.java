@@ -332,23 +332,35 @@ public class StripMineBehavior {
                 break;
             }
         }
-        
+
         if (cobbleSlot == -1) return false;
-        
+
+        ServerWorld world = player.getEntityWorld();
+        if (!world.getBlockState(pos).isAir()) return true;   // 已是固体(上一 tick 放好)→ 视为成功
+
         PacketHelper.setSelectedSlot(player, cobbleSlot);
-        net.minecraft.util.hit.BlockHitResult hit = new net.minecraft.util.hit.BlockHitResult(
-            net.minecraft.util.math.Vec3d.ofCenter(pos.down()).add(0, 0.5, 0),
-            Direction.UP,
-            pos.down(),
-            false
-        );
-        PacketHelper.interactBlock(player, net.minecraft.util.Hand.MAIN_HAND, hit);
-        
-        net.minecraft.item.ItemStack handStack = player.getStackInHand(net.minecraft.util.Hand.MAIN_HAND);
-        player.interactionManager.interactBlock(player, player.getEntityWorld(), handStack, net.minecraft.util.Hand.MAIN_HAND, hit);
-        
-        PacketHelper.swingHand(player, net.minecraft.util.Hand.MAIN_HAND);
-        return true;
+
+        // V5.112 FIX: 依次尝试「贴相邻固体方块的面」放置,并验证真的放上去了。
+        //   原实现只点 pos.down() 顶面且无脑 return true:竖井开口处下方是空气(无可点击面)→ 放置
+        //   静默失败,却仍报成功 → tickAscend 的 consecutiveFails>40 中止永远不触发 → 在原地「安全爬升」
+        //   死循环(实测 PigTrader Y34 卡 5.5h)。1 宽竖井四壁是石头,点侧壁即可成功;全放不上则如实
+        //   返回 false → 累计 40 次后正常中止退 IDLE,绝不永久冻结。
+        Direction[] faces = { Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST };
+        for (Direction face : faces) {
+            BlockPos anchor = pos.offset(face);                 // 要点击的相邻方块
+            if (world.getBlockState(anchor).isAir()) continue;  // 没有可点击的面 → 换下一个
+            Direction side = face.getOpposite();                // anchor 朝向 pos 的那个面
+            net.minecraft.util.hit.BlockHitResult hit = new net.minecraft.util.hit.BlockHitResult(
+                net.minecraft.util.math.Vec3d.ofCenter(anchor).add(
+                    net.minecraft.util.math.Vec3d.of(side.getVector()).multiply(0.5)),
+                side, anchor, false);
+            PacketHelper.interactBlock(player, net.minecraft.util.Hand.MAIN_HAND, hit);
+            net.minecraft.item.ItemStack handStack = player.getStackInHand(net.minecraft.util.Hand.MAIN_HAND);
+            player.interactionManager.interactBlock(player, world, handStack, net.minecraft.util.Hand.MAIN_HAND, hit);
+            PacketHelper.swingHand(player, net.minecraft.util.Hand.MAIN_HAND);
+            if (!world.getBlockState(pos).isAir()) return true; // 验证:pos 真从空气变成了固体方块
+        }
+        return false;   // 所有面都放不上 → 如实返回失败
     }
 
     /** V5.98: 数背包圆石 + 圆石深板岩(能合石器的)总量,供圆石目标 strip-mine 早退判定。 */
@@ -473,24 +485,31 @@ public class StripMineBehavior {
      *     一下井就因身上有铁镐立刻 abort,永远攒不到铁甲所需的铁锭。
      */
     private static boolean hasIronInInventory(ServerPlayerEntity player) {
-        int ironCount = 0;
+        int rawIronCount = 0;
+        int ironIngotCount = 0;
         boolean hasIronPick = false;
         for (int i = 0; i < player.getInventory().size(); i++) {
             ItemStack stack = player.getInventory().getStack(i);
             if (stack.isEmpty()) continue;
             Item item = stack.getItem();
-            if (item == Items.IRON_INGOT || item == Items.RAW_IRON) {
-                ironCount += stack.getCount();
+            // NOTE: 粗铁与铁锭分开统计，用途完全不同(粗铁需冶炼，铁锭可直接合成)
+            if (item == Items.RAW_IRON) {
+                rawIronCount += stack.getCount();
+            } else if (item == Items.IRON_INGOT) {
+                ironIngotCount += stack.getCount();
             }
             if (item == Items.IRON_PICKAXE || item == Items.DIAMOND_PICKAXE || item == Items.NETHERITE_PICKAXE) {
                 hasIronPick = true;
             }
         }
+        // NOTE: abort 阈值用 rawIron + ironIngot 之和判断，因为 bot 需要带粗铁回地表冶炼，
+        //   不能因为"全是粗铁"就不收手（否则永远出不了矿井）。
+        int totalIron = rawIronCount + ironIngotCount;
         // 没铁镐: 凑够 3 铁合铁镐才收手
-        if (!hasIronPick) return ironCount >= 3;
+        if (!hasIronPick) return totalIron >= 3;
         // 有铁镐: 至少攒 4 铁(够合 1 件铁靴 — 最小铁甲部件)才值得回程;
         //   全副武装后不会进铁目标 strip-mine,此分支只服务"有镐但缺甲"的补铁场景
-        return ironCount >= 4;
+        return totalIron >= 4;
     }
 
     /**
