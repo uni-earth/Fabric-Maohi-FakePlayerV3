@@ -168,7 +168,7 @@ public final class CraftingBehavior {
 		//    资源时序:第 1 把石镐(步 5) → 用其挖石头 → 8 cobble 合熔炉(步 8) → 6 cobble 合 2 把备用(本步)。
 		//    cobble ≥ 3 而非 ≥ 6,让 bot 攒到 3 cobble 就先合 1 把备用,不等到攒 6 才动。
 		//    铁镐(250)/钻石镐(1561) 也计入数量,IRON_AGE+ bot 不会被强制再合石镐。
-		else if (hasStonePickaxe && stonePickaxeOrBetterCount < 3 && cobbleCount >= 3 && workbenchNearby) {
+		else if (hasStonePickaxe && stonePickaxeOrBetterCount < 3 && cobbleCount >= 3 && stickCount >= 2 && workbenchNearby) {
 			target = Items.STONE_PICKAXE;
 			ticks = 40;
 		}

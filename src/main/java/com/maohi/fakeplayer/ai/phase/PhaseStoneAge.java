@@ -362,14 +362,19 @@ public final class PhaseStoneAge implements Phase {
                     //     恒 null → setExplore → explore_pull_home 把目标 Y 钳在洞里 → moved30s=0 → expired ♾。
                     //   病象2(Leo):已知炉在脚下方 y15(dy-52),自己在地表 y67 → RETURN_TO_BASE 永远走不到那口
                     //     深井残留炉 → moved30s=0 卡死(实测 13h 一锭未熔)。
-                    //   (a) V5.113 先忘掉「脚下方 >10 格且不在 park 范围」的深井残留炉(清 knownFurnacePos)——
-                    //       绝不死磕够不到的远炉。清后:地表 bot 落到下面"无炉"分支 SA-P4/P6 就地建新炉;
-                    //       深处 bot 接 (b) 上爬。findFurnace 已在上方跑过,清空后本轮不再重扫,下轮深井炉超 24 格也不会回扫。
+                    //   (a) V5.113/V5.115 先忘掉「够不到」的残留炉(清 knownFurnacePos)—— 绝不死磕够不到的远炉:
+                    //       · 深井型:脚下方 >10 格且不在 park 范围(Leo botY67/炉Y15)
+                    //       · 水平太远型:>40 格(V5.115,Hunter/Tiny 实测炉在 58-60 格外,RETURN_TO_BASE moved30s=0 走不到)
+                    //       清后:bot 落到下面"无炉"分支 SA-P4/P6 就地建新炉(有圆石+V5.114 强放必落地);深处 bot 接 (b) 上爬。
+                    //       findFurnace 已在上方跑过,清空后本轮不再重扫,下轮远炉超 24 格也不会回扫。
+                    double saFurnDistSq = saFurnace != null
+                        ? player.getBlockPos().getSquaredDistance(saFurnace) : 0.0;
                     if (saFurnace != null
-                            && saFurnace.getY() < player.getBlockY() - 10
-                            && player.getBlockPos().getSquaredDistance(saFurnace) > 25.0) {
-                        com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_forget_deep_furnace",
-                            "furnace", saFurnace, "botY", player.getBlockY());
+                            && ((saFurnace.getY() < player.getBlockY() - 10 && saFurnDistSq > 25.0)
+                                || saFurnDistSq > 1600.0)) {   // 1600 = 40²:超 40 格寻路不可靠,就地重建
+                        com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_forget_furnace",
+                            "furnace", saFurnace, "botY", player.getBlockY(), "distSq", (int) saFurnDistSq,
+                            "reason", saFurnDistSq > 1600.0 ? "too_far" : "deep_below");
                         personality.knownFurnacePos = null;
                         saFurnace = null;
                     }
