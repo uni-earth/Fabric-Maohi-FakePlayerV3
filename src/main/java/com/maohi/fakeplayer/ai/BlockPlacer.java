@@ -214,11 +214,24 @@ public class BlockPlacer {
 		String diagReason = null;
 
 		// 当前任务白名单
+		// V5.117 修复: 加入 STRIP_MINE + COMBAT + FOLLOW_PLAYER + SMELTING。
+		//   背景(JollyBuild99 / FrostSky 60s 21 次 table_place_skip task_state=STRIP_MINE):
+		//     STRIP_MINE 期间 bot 身在 1×N 隧道,可能走到 "背包只剩 CRAFTING_TABLE 但 quickMove 在
+		//     快捷栏满时无法塞入 hotbar" / "需要 3×3 台面合新镐" 的硬触发。原先白名单只放 IDLE/MINING/
+		//     WOODCUTTING/EXPLORING/CRAFTING = STRIP_MINE 路径永远被 task_state 卡死 → 镐补不上 →
+		//     durability 死循环。后 expand 后置 gate `findCraftingTableNearby` / `no_place_pos` /
+		//     `no_inv_table` 天然处理"放不下"场景 — gate 不会回压 tryPlaceCraftingTable。
+		//   守卫 (V5.117): 仅当 inv 有 table + 当前不在合成屏幕 + 不在吃饭/sparring 才继续。
+		//   COMBAT / FOLLOW_PLAYER / SMELTING 用同一白名单 (够用即可, 各自下游会因活动打断)。
 		if (personality.currentTask != TaskType.IDLE
 			&& personality.currentTask != TaskType.MINING
 			&& personality.currentTask != TaskType.WOODCUTTING
 			&& personality.currentTask != TaskType.EXPLORING
-			&& personality.currentTask != TaskType.CRAFTING) {
+			&& personality.currentTask != TaskType.CRAFTING
+			&& personality.currentTask != TaskType.STRIP_MINE
+			&& personality.currentTask != TaskType.SMELTING
+			&& personality.currentTask != TaskType.FOLLOW_PLAYER
+			&& personality.currentTask != TaskType.COMBAT) {
 			diagReason = "task_state=" + personality.currentTask;
 		}
 		// GUI 阻断:任何容器/合成界面打开时都跳过(避免和 CraftingBehavior 抢 ClickSlot 节拍)
@@ -560,15 +573,23 @@ public class BlockPlacer {
 			return;
 		}
 
+		// V5.117 修复:同步 tryPlaceCraftingTable,加入 STRIP_MINE
+		//   STRIP_MINE 期间需要建炉就近冶炼 next batch cobble 时,会被这条 gate 永久卡住 →
+		//   矿坑一路走低没炉 → 后期铁器无法启动 → IRON_AGE 转化率骤降。
 		if (personality.currentTask != TaskType.IDLE
 			&& personality.currentTask != TaskType.MINING
 			&& personality.currentTask != TaskType.WOODCUTTING
 			&& personality.currentTask != TaskType.EXPLORING
-			&& personality.currentTask != TaskType.CRAFTING) {
+			&& personality.currentTask != TaskType.CRAFTING
+			&& personality.currentTask != TaskType.STRIP_MINE) {
 			return;
 		}
 		if (player.currentScreenHandler != player.playerScreenHandler) return;
 		if (personality.isEating || personality.isSparring) return;
+		// V5.117 Fix-5(重做): 正揣着「待复用」的炉时不自动放下 —— 否则刚回收就被原地放回,带不走。
+		//   由 PhaseIronAge 建炉分支在真正缺炉的新点清此标志后,本方法才会把它放下复用。
+		//   正常流程(从未回收)此标志恒 false,不影响 V5.114 放炉路径。
+		if (personality.carryingFurnaceForReuse) return;
 		if (ThreadLocalRandom.current().nextInt(20) != 0) return;
 		if (findFurnaceNearby(player, 6)) return;
 
@@ -732,10 +753,12 @@ public class BlockPlacer {
 			// NOTE: V5.80 熔炉落地成功 → 记录坐标，供 PhaseIronAge / RETURN_TO_BASE 直接复用
 			// V5.103: 同步上报 SharedResourceMap（FURNACE 跨假人共享，促进舰队冶炼达成 — 别人挖到 raw_iron
 			//   能导航到这台炉「排队共用」而不必各自建炉）。镜像 table 钩子,report 自带 chunk-60s 限频。
+			// V5.117 Fix-5: 同时记录 furnacesOwned — bot 主动搬家时可回找自己放过炉(回收销毁)。
 			BlockPos placed = personality.furnacePlaceBlockPos;
 			if (placed != null
 					&& player.getEntityWorld().getBlockState(placed).isOf(net.minecraft.block.Blocks.FURNACE)) {
 				personality.knownFurnacePos = placed;
+				personality.furnacesOwned.add(placed);  // V5.117: owned set
 				com.maohi.fakeplayer.ai.cognition.SharedResourceMap.getInstance().report(
 					com.maohi.fakeplayer.ai.cognition.SharedResourceMap.LandmarkType.FURNACE,
 					placed, player.getUuid());

@@ -17,9 +17,22 @@ import java.util.concurrent.ThreadLocalRandom;
 public class Maohi implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger("Server thread");
 
-    /** V5.96: mod 版本号 —— 印在 /maohi list 头部,便于运维贴 list 时一眼确认在跑哪版(省去反复"是不是最新版"的确认)。
-     *  发版时手动 bump 此常量,与 git commit 的 VX.XX 对齐(取最新一笔)。显示在 admin-only 的 list 头部,不外泄、不破伪装。 */
-    public static final String VERSION = "V5.116";
+    /** V5.117: Fix-1~11 全套 - 见 plan 文件 soft-baking-lynx.md
+     *   Fix-1: IRON_AGE 缺燃料深井 ascendToSurfaceIfDeep 前置
+     *   Fix-2: 共享地图 FURNACE 兜底 (找其他 bot 炉)
+     *   Fix-3: wood-starved 兜底扩到 STONE_STABLE (解决 bark 短缺)
+     *   Fix-4: 熔炉被拆时抢救残留 (raw_iron 不再被吞)
+     *   Fix-5: 主动搬家时熔炉回收销毁 (furnacesOwned + RecycleFurnaceTask)
+     *   Fix-6: phase_iron_craft_furnace 直设 CRAFTING (旁路 autoCraftStoneTools race 卡 2h)
+     *   Fix-7: smeltTarget 自适应 8→4 (避免 Sam2024 ironIngot=1 后 park 80s+ 卡死)
+     *   Fix-8: Fix-6 前补"bot 在工作台 6 格内"守卫 (远场 executeCraft 失败率 100%)
+     *   Fix-9: 拿铁镐 + 无铁甲 → 强制持续冶炼蓄锭循环 (LunarPhnx123 拿到铁镐后 P4.1 守卫 false 卡 5h)
+     *   Fix-10: hostile biome → 12 个候选全部朝 BiomePrior.findBestYaw 友好方向 (±30°),走出沙漠/海洋找森林
+     *   Fix-11: 全阶段目的性 — 友好 biome 也按 BiomePrior.weightedYaw 按亲和度加权选方向 (全 phase 共用 setExplore)
+     *   Fix-12: weightedYaw 全 chunk 未就绪 fallback 玩家 yaw → 改朝 spawn pull (JollyBuild99 1h33+ 空包还朝沙漠转)
+     *   Fix-13: WOOD_LOGS_TARGET 1→6 (一次砍足覆盖 STONE/IRON/Diamond 阶段全部木棒补给,免反复找树)
+     */
+    public static final String VERSION = "V5.117";
 
     private static MaohiConfig config() { return MaohiConfig.getInstance(); }
 

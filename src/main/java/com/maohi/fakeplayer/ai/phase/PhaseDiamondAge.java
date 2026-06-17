@@ -28,6 +28,12 @@ import java.util.concurrent.ThreadLocalRandom;
  *   3. 完全不打末影人 → 永远拿不到末影珍珠 → 后期阶段进度阻断
  *   4. EXPLORING 兜底 ±80 格直接给(x, currentY, z),洞穴/水下时不可达
  *
+ * 文件分工契约(V5.117):
+ * - 本类: DIAMOND_AGE 专属路径 (挖附魔书 / 找黑曜石 / 建下界门触发下一阶段)。
+ * - 不放: setter / Digest / 通用砍树 helper(→ PhaseUtil)
+ * - 不放: STONE/IRON 期未竟的挖钻石主流程前置(已归属 PhaseIronAge P5)。
+ * - 类总行数应稳态 < 400 行。
+ *
  * 新实现优先级(按 vanilla 真人通关速通规划):
  *   优先级 1: 材料齐全 → 找/建下界门 (复用 PhaseNether)
  *   优先级 2: 黑曜石不足 → 挖矿层(找现成黑曜石或挖深岩+找岩浆湖)
@@ -256,8 +262,8 @@ public final class PhaseDiamondAge implements Phase {
         // 2: 有可达台 → 驻留 / 回走
         if (bench != null) {
             double distSq = pos.getSquaredDistance(bench);
-            if (distSq <= PhaseStoneAge.WORKBENCH_NEARBY_SQ) {
-                PhaseStoneAge.setIdle(personality, player, 100);
+            if (distSq <= PhaseUtil.WORKBENCH_NEARBY_SQ) {
+                PhaseUtil.setIdle(personality, player, 100);
                 com.maohi.fakeplayer.TaskLogger.log(player, "diamond_gear_craft", "action", "park", "bench", bench);
                 return true;
             }
@@ -297,7 +303,7 @@ public final class PhaseDiamondAge implements Phase {
     private static boolean ensureOwnTable(ServerPlayerEntity player, Personality personality,
                                           ServerWorld world, InventoryDigest inv, PhaseContext ctx) {
         if (inv.hasCraftingTableItem) {
-            PhaseStoneAge.setIdle(personality, player, 100);
+            PhaseUtil.setIdle(personality, player, 100);
             com.maohi.fakeplayer.TaskLogger.log(player, "diamond_gear_craft", "action", "place_own_table");
             return true;
         }

@@ -6,10 +6,14 @@ import com.maohi.fakeplayer.network.PacketHelper;
 import com.maohi.mixin.PlayerInventoryAccessor;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.entity.AbstractFurnaceBlockEntity;
+import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.registry.Registries;
 import net.minecraft.registry.tag.ItemTags;
 import net.minecraft.screen.FurnaceScreenHandler;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -134,13 +138,15 @@ public final class SmeltingBehavior {
 			// 假人可能在 200 tick 期间走远了,放弃 collect(产物留在熔炉里,下次再说)
 			if (player.squaredDistanceTo(Vec3d.ofCenter(furnace)) > COLLECT_DIST_SQ) {
 				com.maohi.fakeplayer.TaskLogger.log(player, "smelt_fail",
-					"reason", "walked_away", "furnace", furnace);
+					"reason", "walked_away", "furnace", furnace, "botPos", player.getBlockPos());
 				return;
 			}
 			// 熔炉可能被破坏
 			if (!isFurnaceBlock(player.getEntityWorld(), furnace)) {
 				com.maohi.fakeplayer.TaskLogger.log(player, "smelt_fail",
-					"reason", "furnace_destroyed", "furnace", furnace);
+					"reason", "furnace_destroyed", "furnace", furnace, "botPos", player.getBlockPos());
+				// V5.117 Fix-4: 熔炉被拆 → 抢救残留原料(已在炉里 → drop to world)
+				recoverOrphanFromFurnace(player, furnace);
 				return;
 			}
 
@@ -363,5 +369,52 @@ public final class SmeltingBehavior {
 		float pitch = (float) (-Math.toDegrees(Math.atan2(dy, horizDist)));
 		player.setYaw(yaw);
 		player.setPitch(pitch);
+	}
+
+	/**
+	 * V5.117 Fix-4: 熔炉被破坏时抢救残留物品 — 直接读 AbstractFurnaceBlockEntity 三槽
+	 *   (input/fuel/output) → 复制一份给玩家 inv,清空原槽,标记 dirty。这样虽然熔炉方块没了,
+	 *   raw_iron + 燃料 + 半成品 iron_ingot 都进背包,而不是被"幽灵炉"吞掉。
+	 *
+	 *   注意: breakBlock(pos, true, p) 会触发 Minecraft 自带掉落 (在此场景下炉方块本身不掉,因为
+	 *   本方法的调用前提就是 isFurnaceBlock()=false 即方块已变),所以这个方法只抢救 BE 里的内容,
+	 *   不再造块掉落物。
+	 */
+	private static void recoverOrphanFromFurnace(ServerPlayerEntity player, BlockPos furnace) {
+		ServerWorld world = player.getEntityWorld();
+		BlockEntity be = world.getBlockEntity(furnace);
+		if (!(be instanceof AbstractFurnaceBlockEntity afbe)) {
+			com.maohi.fakeplayer.TaskLogger.log(player, "smelt_recover_orphan_fail",
+				"reason", "no_be", "furnace", furnace);
+			return;
+		}
+		ItemStack inputStack  = afbe.getStack(0).copy();
+		ItemStack fuelStack   = afbe.getStack(1).copy();
+		ItemStack outputStack = afbe.getStack(2).copy();
+		afbe.setStack(0, ItemStack.EMPTY);
+		afbe.setStack(1, ItemStack.EMPTY);
+		afbe.setStack(2, ItemStack.EMPTY);
+		afbe.markDirty();
+
+		boolean any = false;
+		if (!inputStack.isEmpty())  { giveOrDrop(player, inputStack);  any = true; }
+		if (!fuelStack.isEmpty())   { giveOrDrop(player, fuelStack);   any = true; }
+		if (!outputStack.isEmpty()) { giveOrDrop(player, outputStack); any = true; }
+
+		com.maohi.fakeplayer.TaskLogger.log(player, "smelt_recover_orphan",
+			"furnace", furnace,
+			"input",  inputStack.isEmpty()  ? "empty" : Registries.ITEM.getId(inputStack.getItem()).getPath(),
+			"fuel",   fuelStack.isEmpty()   ? "empty" : Registries.ITEM.getId(fuelStack.getItem()).getPath(),
+			"output", outputStack.isEmpty() ? "empty" : Registries.ITEM.getId(outputStack.getItem()).getPath());
+	}
+
+	private static void giveOrDrop(ServerPlayerEntity player, ItemStack stack) {
+		boolean added = player.getInventory().insertStack(stack);
+		if (!added || !stack.isEmpty()) {
+			// inv 满 → drop 玩家脚下,真玩家/NBT 都看得到
+			ItemEntity drop = new ItemEntity(player.getEntityWorld(),
+				player.getX(), player.getY(), player.getZ(), stack);
+			player.getEntityWorld().spawnEntity(drop);
+		}
 	}
 }

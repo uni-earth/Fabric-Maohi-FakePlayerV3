@@ -126,6 +126,87 @@ public final class BiomePrior {
         return getAffinity(player, resource) <= -2;
     }
 
+    /**
+     * V5.117 Fix-10: 给定玩家当前位置，在 8 个方向上探测 ~64 格外的 biome，
+     *   返回最友好方向的 yaw（degrees，供 setExplore 直接用）。
+     *   chunk 未加载或全平局时回退 -1 → 调用者 fallback 用 player.getYaw()。
+     */
+    public static float findBestYaw(ServerPlayerEntity player, ResourceType resource, java.util.concurrent.ThreadLocalRandom rng) {
+        ServerWorld world = player.getEntityWorld();
+        BlockPos pos = player.getBlockPos();
+        final int probeDist = 64; // 探测距离
+        final int numDirs = 8;
+        float bestYaw = -1f;
+        int bestScore = Integer.MIN_VALUE;
+        for (int i = 0; i < numDirs; i++) {
+            // 8 个均匀方向 + ±22.5° 抖动
+            float yaw = (i * (360f / numDirs)) + (rng.nextFloat() * 45f - 22.5f);
+            double rad = Math.toRadians(yaw);
+            int tx = pos.getX() + (int) Math.round(-Math.sin(rad) * probeDist);
+            int tz = pos.getZ() + (int) Math.round(Math.cos(rad) * probeDist);
+            int score = getAffinityAt(world, tx, tz, pos.getY(), resource);
+            if (score > bestScore) {
+                bestScore = score;
+                bestYaw = yaw;
+            }
+        }
+        return bestYaw;
+    }
+
+    /**
+     * V5.117 Fix-11: 全局目的性 — 探测 16 个方向的 biome affinity, 按权重(0 正 1 中 -1 负)
+     *   随机抽取 1 个 yaw。chunk 未加载方向视为 0 (中立)。
+     *   - score = +2 → weight 4 (强偏好)
+     *   - score = +1 → weight 2
+     *   - score = 0  → weight 0 (中立, 不被采)
+     *   - score = -1 → weight -2 (负,任何中立候选出时优先排)
+     *   - score = -2 → weight -4 (强负)
+     *   全 0 或全负 → fallback 玩家当前 yaw。
+     */
+    public static float weightedYaw(ServerPlayerEntity player, ResourceType resource, java.util.concurrent.ThreadLocalRandom rng) {
+        ServerWorld world = player.getEntityWorld();
+        BlockPos pos = player.getBlockPos();
+        final int probeDist = 48; // 比 findBestYaw 略近 — bot 几百格内找资源,48 格更敏感
+        final int numDirs = 16;
+        float[] yaws = new float[numDirs];
+        int[] weights = new int[numDirs];
+        int total = 0;
+
+        for (int i = 0; i < numDirs; i++) {
+            float yaw = i * (360f / numDirs) + (rng.nextFloat() * 22.5f - 11.25f);
+            yaws[i] = yaw;
+            double rad = Math.toRadians(yaw);
+            int tx = pos.getX() + (int) Math.round(-Math.sin(rad) * probeDist);
+            int tz = pos.getZ() + (int) Math.round(Math.cos(rad) * probeDist);
+            int score = getAffinityAt(world, tx, tz, pos.getY(), resource);
+            // 把 -2..+2 映射到 -4..+4,再加 +5 保证非负 → 加权随机选
+            int w = score * 2 + 5;
+            if (w < 0) w = 0; // -2 -> 1 (极弱避免沙漠那种 hero effort 还是被采)
+            // 但 score=-2 的方向 weight=1 (衰减 5x),如实反映 hostile
+            weights[i] = w;
+            total += w;
+        }
+
+        if (total <= 0) {
+            // 全 chunk 未就绪 → 保守朝 spawn 走,让 bot 走近 spawn 周围已 populate 的 chunk 区域。
+            //   旧 fallback 用 player.getYaw() 在 desert/ocean 里继续原地转,1h+ 0 进展(JollyBuild99 案例)。
+            //   朝 spawn 拉 50~150 格内必然已 populate,下一周期 weightedYaw 命中真 biome。
+            // V5.117: 走 PhaseUtil.getWorldSpawnCached 共享 60s 缓存,避免此处热路径每 tick 反射。
+            net.minecraft.util.math.BlockPos spawnPos =
+                com.maohi.fakeplayer.ai.phase.PhaseUtil.getWorldSpawnCached(world);
+            double dx = spawnPos.getX() - pos.getX();
+            double dz = spawnPos.getZ() - pos.getZ();
+            return (float) Math.toDegrees(Math.atan2(-dx, dz));
+        }
+        int r = rng.nextInt(total);
+        int acc = 0;
+        for (int i = 0; i < numDirs; i++) {
+            acc += weights[i];
+            if (r < acc) return yaws[i];
+        }
+        return yaws[numDirs - 1];
+    }
+
     // ==================== 核心亲和度计算 ====================
 
     private static int computeAffinity(RegistryEntry<Biome> biomeEntry, ResourceType resource) {

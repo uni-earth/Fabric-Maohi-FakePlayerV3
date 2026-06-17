@@ -1018,6 +1018,12 @@ prepareAndSpawnVirtualPlayer();
                 // 2. 生存与成长逻辑 (自动装备、合成等)
                 tickSurvivalAndProgression(p, personality);
 
+                // V5.117 Fix-5: 推进熔炉回收状态机 —— phase 设 recycleTarget 后,本机自 stage-0 起完整初始化
+                //   (切镐 / 记原槽 / 计时),不再要求调用方预置 stage>0(那样会跳过初始化、用错原槽)。
+                if (personality.recycleTarget != null) {
+                    com.maohi.fakeplayer.ai.RecycleFurnaceTask.tick(p, personality, personality.recycleTarget);
+                }
+
                 // 3. 社交与感知 (环境感知、真实玩家互动、怨恨系统)
                 tickSocialAndPerception(p, personality, uuid, tickNow);
 
@@ -1925,7 +1931,7 @@ prepareAndSpawnVirtualPlayer();
     /**
      * V5.30 任务失败计数兜底:连续 ≥4 次失败时调用,把假人甩到远征 EXPLORING 目标,
      * 切断"反复撞同一棵够不到的树/挖同一块够不到的石头"的卡死循环。
-     * 朝当前 yaw ±60° 扇形采样,贴合 PhaseStoneAge.setExplore 的"定向跋涉"观感,而不是回头跑。
+     * 朝当前 yaw ±60° 扇形采样,贴合 PhaseUtil.setExplore (V5.117 由 PhaseStoneAge 迁出)的"定向跋涉"观感,而不是回头跑。
      * V5.30+ Y-snap:同 setExplore 一样把目标 Y 拉到 MOTION_BLOCKING 表面,
      *   防止 bot 卡 y=0(spawn 异常)时永远在 y=0 横向打转、扫不到地表树/石头。
      * V5.43 P-1.C 阶梯递增:原固定 50~70 格,bot spawn 在 desert/ocean/无树 biome 时

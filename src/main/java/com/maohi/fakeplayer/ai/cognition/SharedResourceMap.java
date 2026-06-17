@@ -264,6 +264,15 @@ public final class SharedResourceMap {
     /** 调试：返回当前节点数 */
     public int size() { return nodes.size(); }
 
+    /** V5.117 Fix-5: 快照某类型的所有 Landmark Node — RecycleFurnaceTask 用于查 claim 状态 */
+    public java.util.List<LandmarkNode> snapshotLandmarks(LandmarkType type) {
+        java.util.List<LandmarkNode> result = new java.util.ArrayList<>(nodes.size());
+        for (LandmarkNode n : nodes.values()) {
+            if (n.type == type) result.add(n);
+        }
+        return result;
+    }
+
     // ==================== 工具 ====================
 
     private static long packKey(BlockPos pos) {

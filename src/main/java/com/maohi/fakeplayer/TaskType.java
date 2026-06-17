@@ -23,5 +23,8 @@ public enum TaskType {
 	//   目标 = knownFurnacePos（优先）或 knownWorkbenchPos；
 	//   若两者皆无，则向 world spawn 方向 EXPLORING。
 	//   到达后自动切 IDLE，让 autoSmeltOres / autoCraftStoneTools 接管后续操作。
-	RETURN_TO_BASE
+	RETURN_TO_BASE,
+	SMELTING,
+	FOLLOW_PLAYER,
+	COMBAT
 }

@@ -87,7 +87,7 @@ public final class BlockScanCache {
 			//   但 STONE_AGE 早期 bot 没楼梯/没工具,爬不上 25 格垂直差距。日志现象:
 			//   1. bot 在 chunk 卡顿期 spawn 后掉入地下洞穴(y=63→y=38)
 			//   2. 扫树时 surfaceY=63, relSurface=25, yMax 拉到 +25
-			//   3. 命中地表 y=63 树 → PhaseStoneAge.assignChopTree y-diff>8 拉黑(V5.43.4)
+			//   3. 命中地表 y=63 树 → PhaseUtil.assignChopTree y-diff>8 拉黑(V5.43.4, V5.117 由 PhaseStoneAge 迁出)
 			//   4. fallback setExplore 给 bot.y=38 同 Y 的 EXPLORING target(V5.43.3 P-3.I)
 			//   5. bot 在地下 xz 方向被石头封死 → moved30s=0.00 →task_fail → 重复 1~5
 			//   → 10 天 0 成就。

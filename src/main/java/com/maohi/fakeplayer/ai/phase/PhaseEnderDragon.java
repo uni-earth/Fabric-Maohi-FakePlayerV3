@@ -51,6 +51,11 @@ import java.util.concurrent.ThreadLocalRandom;
  *   7. hasEnderEyes 扫整个 inv 但 activateEndPortal/throwEnderEye 只看 hotbar 0-8 —
  *      不一致,统一改为扫整个 inv 并自动切槽。
  *   8. 末地 EXPLORING 平面 ±100 — 会走到虚空。改为主平台附近安全目标。
+ *
+ * 文件分工契约(V5.117):
+ * - 本类: 末地维度专属 (EndCrystal 攻击 + 末影龙战斗 + ExitPortal 退场)。
+ * - 通用 setter / Digest / 砍树 helper → PhaseUtil
+ * - 类总行数应稳态 < 700 行。
  */
 public final class PhaseEnderDragon implements Phase {
 

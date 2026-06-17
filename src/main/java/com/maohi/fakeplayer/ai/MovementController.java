@@ -1,6 +1,7 @@
 package com.maohi.fakeplayer.ai;
 
 import com.maohi.fakeplayer.GrowthPhase;
+import com.maohi.fakeplayer.ai.phase.PhaseUtil;
 import com.maohi.fakeplayer.network.MovementInputHelper;
 import com.maohi.fakeplayer.network.PacketHelper;
 import net.minecraft.block.BlockState;
@@ -1199,31 +1200,15 @@ public class MovementController {
 
 	// ============================================================
 	// V5.66 统一「皮筋」: 把救援/重定位落点收进当前阶段+维度允许范围。
-	//   背景: explorationRadius spawn 上限原本只活在 PhaseStoneAge.setExplore, 三条救援路径
+	//   背景: explorationRadius spawn 上限原本只活在 PhaseUtil.setExplore (V5.117 由 PhaseStoneAge 迁出), 三条救援路径
 	//   (本文件 sink_guard 远征 / VPM force_explore / VPM escalation>=4 teleport) 绕过它,
 	//   把早期 bot 甩到上千格外 → 多个独立 chunk-gen 前沿 → Can't keep up warn。
 	//   皮筋只套在救援落点, 不碰 phase 自身的合法探索 (30/60~120/150 格)。
 	// ============================================================
 
-	/** 主世界 spawn 60s 缓存 (leash 专用), 复用 PhaseStoneAge.getWorldSpawnCached 同款反射读法。 */
-	private static volatile BlockPos cachedOverworldSpawn = null;
-	private static volatile long overworldSpawnCacheAt = 0L;
-
+	/** V5.117: 主世界 spawn 60s TTL 共用缓存 (leash 专用), 通过 PhaseUtil 共享, 不再维护私有副本。 */
 	private static BlockPos overworldSpawn(ServerWorld world) {
-		long now = System.currentTimeMillis();
-		BlockPos cached = cachedOverworldSpawn;
-		if (cached != null && now - overworldSpawnCacheAt < 60_000L) return cached;
-		try {
-			Object props = world.getLevelProperties();
-			java.lang.reflect.Method m = props.getClass().getMethod("getSpawnPos");
-			Object pos = m.invoke(props);
-			if (pos instanceof BlockPos bp) {
-				cachedOverworldSpawn = bp;
-				overworldSpawnCacheAt = now;
-				return bp;
-			}
-		} catch (Throwable ignored) {}
-		return cached != null ? cached : new BlockPos(0, 64, 0);
+		return PhaseUtil.getWorldSpawnCached(world);
 	}
 
 	/**

@@ -13,6 +13,10 @@ import net.minecraft.server.network.ServerPlayerEntity;
  *   - 无状态(允许做成单例 INSTANCE)
  *   - 不直接持有 player/personality 引用
  *   - 通过 ctx 拿到查找方块/敌人的回调
+ *
+ * 文件归属(V5.117):
+ *   实现类放 /phase/PhaseWoodAge.java / PhaseStoneAge.java / PhaseIronAge.java ...
+ *   跨阶段共享 helper / setter / 常量 / 数据结构 → PhaseUtil
  */
 public interface Phase {
 	/**

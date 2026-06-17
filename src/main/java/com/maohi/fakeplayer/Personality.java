@@ -458,6 +458,28 @@ public class Personality {
 	public transient BlockPos knownFurnacePos = null;    // 最近一次确认存在的熔炉坐标
 	public transient BlockPos knownWorkbenchPos = null;  // 最近一次确认存在的工作台坐标
 
+	// V5.117 Fix-5: 本 bot 拍包隆过的炉子坐标集合 — 用于回收销毁(NOT 强制拾起 item 入背包,
+	//   而是 breakBlock(dropLoot=true) → 自动掉成 FURNACE item → pickupAllNearbyDrops 自吸。
+	//   transient: 与 knownFurnacePos 同理由,跨 session 失忆。
+	public transient java.util.HashSet<BlockPos> furnacesOwned = new java.util.HashSet<>();
+
+	// V5.117 Fix-5: RecycleFurnaceTask 状态字段
+	public transient int recycleStage = 0;
+	public transient BlockPos recycleTarget = null;
+	public transient int recycleOriginalSlot = 0;
+	public transient int recycleTicks = 0;
+
+	// V5.117 Fix-5(重做): 回收成功后置真,表示背包里揣着一台「待复用」的 FURNACE item。
+	//   置真期间 BlockPlacer.tryPlaceFurnace 不自动放下(否则下一 tick 就把刚收的炉原地放回,带不走);
+	//   bot 走到新点真正缺炉时由 PhaseIronAge 建炉分支清此标志 → 放下复用,省 8 圆石。
+	//   transient: 仅本 session 有效(背包里那台炉本就 transient 失忆,标志同寿命)。
+	public transient boolean carryingFurnaceForReuse = false;
+
+	// V5.117: staircase state
+	public transient BlockPos staircaseOrigin = null;
+	public transient net.minecraft.util.math.Direction staircaseFacing = null;
+	public transient int staircaseDepth = 0;
+
 	// V5.23 聊天近期去重:VocabularyBank 选词时拒绝最近 5 条已说过的台词,
 	// 避免假人短时间内重复说同一句"rain rain go away"等。
 	// 用 ArrayDeque 当固定容量 FIFO 队列。

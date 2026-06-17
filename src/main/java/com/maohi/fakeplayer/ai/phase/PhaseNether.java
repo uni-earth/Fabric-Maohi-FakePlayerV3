@@ -47,6 +47,11 @@ import java.util.concurrent.ThreadLocalRandom;
  *   - 用 RegistryKey 判断维度(`World.NETHER` 是 RegistryKey<World> 常量)
  *   - 传送门交互走 PlayerInteractBlockC2SPacket 真实发包
  *   - 古代残骸用 Blocks.ANCIENT_DEBRIS 检测
+ *
+ * 文件分工契约(V5.117):
+ * - 本类: NETHER 维度专属 (建门 / 引导 / 进入 / 残骸采集 / 进入末地触发)。
+ * - 通用 setter / Digest / 砍树 helper → PhaseUtil
+ * - 类总行数应稳态 < 600 行。
  */
 public final class PhaseNether implements Phase {
 
