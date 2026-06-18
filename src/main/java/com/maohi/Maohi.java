@@ -35,8 +35,13 @@ public class Maohi implements ModInitializer {
      * V5.118: STONE_STABLE 有石镐即主动竖直下矿找铁。原默认 60%砍树/40%地表挖石,只能碰巧挖到裸铁
      *   → considerSmelting 永不触发 → 卡石器数小时;且满地表追树漂进未生成地形 → 主线程 worldgen
      *   → "Can't keep up" mspt 100+。下矿在已加载区块内几乎不 worldgen,一处同治"挖不到铁"+卡顿。
+     *   (并:燃料 findFuelSlot 优先煤/木炭保木料;got_iron 改纯生铁口径;WOOD_LOGS_TARGET 7→12。)
+     *
+     * V5.119: 主动找煤更合理 —— got_iron 仍要 coal≥5 才上爬;煤不够不早退,而是铁够(≥IRON_HOARD_CAP=6)
+     *   后进入「换向找煤」:每 8 格随机转 90° 扫新区域找煤层,用满 max_len(=64)预算,到顶仍无煤才带铁
+     *   上爬(地表木料兜底熔)。比直挖一条线更易撞煤;也修了 V5.118 煤闸把无煤隧道挖到 max_len 囤铁(粗铁20)。
      */
-    public static final String VERSION = "V5.118";
+    public static final String VERSION = "V5.119";
 
     private static MaohiConfig config() { return MaohiConfig.getInstance(); }
 

@@ -33,6 +33,9 @@ public class StripMineBehavior {
     /** V5.118: 铁目标 strip-mine 收手前要带够的煤量(主动挖煤)。否则爬回地表熔铁只能烧木料 → 掏空木棍料。
      *  附近无煤时由 max_len 兜底上爬,不空耗;煤在 Y15 矿区常见,顺路即够。 */
     private static final int COAL_FUEL_TARGET = 5;
+    /** V5.119: 铁够此数即进入「换向找煤」模式 —— 之后每 8 格随机转向扫新区找煤,用满 max_len 预算
+     *  (而非直挖一条线),到 max_len 仍无煤才由 max_len 兜底带铁上爬。 */
+    private static final int IRON_HOARD_CAP = 6;
 
     public static boolean isActive(Personality pers) {
         return pers != null && pers.stripMineState != null;
@@ -188,9 +191,9 @@ public class StripMineBehavior {
         // 检查是否已拿到目标矿物(V5.84: 钻石 goal 收手于 got_diamond,铁 goal 收手于 got_iron)
         boolean forDiamond = pers.stripMineForDiamond;
         boolean haveMineral = forDiamond ? hasDiamondInInventory(player) : hasMinedEnoughRawIron(player);
-        // V5.118 主动挖煤: 铁目标还要带够煤再收手 —— 否则爬回地表熔铁只能烧木料,木棍料被掏空合不出铁镐。
-        //   煤够 / 钻石目标(不等煤) 才收手;有铁缺煤则继续挖,下面 findOre("ore") 会顺路把附近 coal_ore 一并挖了。
-        //   附近无煤的极端情况由后面的 max_len(line 212)兜底上爬,不会无限空耗。
+        // V5.119 主动挖煤: 铁目标够铁后还想凑够煤再上爬(地表熔铁用煤、不掏空木料);煤够 / 钻石目标即收手。
+        //   煤不够则不早退,继续用满 max_len(=64)预算找煤(见下「换向找煤」),到 max_len 仍无煤由 line221
+        //   兜底带铁上爬,地表木料熔(WOOD_LOGS_TARGET=12 够烧)。
         boolean haveFuel = forDiamond || countCoal(player) >= COAL_FUEL_TARGET;
         if (haveMineral && haveFuel) {
             abort(pers, player, forDiamond ? "got_diamond" : "got_iron");
@@ -242,6 +245,18 @@ public class StripMineBehavior {
                     pers.stripMineFacing = dz >= 0 ? Direction.SOUTH : Direction.NORTH;
                 }
             }
+        }
+
+        // V5.119 换向找煤: 铁已够(≥IRON_HOARD_CAP)但煤不够、且这一 tick 没探到矿石 → 每 8 格随机转 90°,
+        //   扫两侧新区域找煤层(直挖一条线易错过两侧煤矿)。用满 max_len(=64)预算;到顶仍无煤由 line223
+        //   的 max_len 兜底带铁上爬。钻石目标不掺和(只认 got_diamond);探到矿时上面已改朝矿、不会被覆盖。
+        if (!forDiamond && orePos == null
+                && pers.stripMineTunnelLen > 0 && pers.stripMineTunnelLen % 8 == 0
+                && countRawIron(player) >= IRON_HOARD_CAP
+                && countCoal(player) < COAL_FUEL_TARGET) {
+            pers.stripMineFacing = ThreadLocalRandom.current().nextBoolean()
+                ? pers.stripMineFacing.rotateYClockwise()
+                : pers.stripMineFacing.rotateYCounterclockwise();
         }
 
         Direction facing = pers.stripMineFacing;
@@ -379,6 +394,18 @@ public class StripMineBehavior {
         for (int i = 0; i < player.getInventory().size(); i++) {
             ItemStack stack = player.getInventory().getStack(i);
             if (stack.getItem() == Items.COAL || stack.getItem() == Items.CHARCOAL) {
+                n += stack.getCount();
+            }
+        }
+        return n;
+    }
+
+    /** V5.119: 统计背包生铁数,供「换向找煤」模式的进入阈值(IRON_HOARD_CAP)判定。 */
+    private static int countRawIron(ServerPlayerEntity player) {
+        int n = 0;
+        for (int i = 0; i < player.getInventory().size(); i++) {
+            ItemStack stack = player.getInventory().getStack(i);
+            if (stack.getItem() == Items.RAW_IRON) {
                 n += stack.getCount();
             }
         }
