@@ -576,12 +576,18 @@ public class BlockPlacer {
 		// V5.117 修复:同步 tryPlaceCraftingTable,加入 STRIP_MINE
 		//   STRIP_MINE 期间需要建炉就近冶炼 next batch cobble 时,会被这条 gate 永久卡住 →
 		//   矿坑一路走低没炉 → 后期铁器无法启动 → IRON_AGE 转化率骤降。
+		// V5.120: 补齐与 tryPlaceCraftingTable 白名单的对称 —— 加 SMELTING/FOLLOW_PLAYER/COMBAT。
+		//   注:这三态目前全代码无处赋值(dead),纯为一致性 + 将来这些任务实装时两个放置器行为同步,
+		//   避免一个能放、一个不能放的隐性漂移。
 		if (personality.currentTask != TaskType.IDLE
 			&& personality.currentTask != TaskType.MINING
 			&& personality.currentTask != TaskType.WOODCUTTING
 			&& personality.currentTask != TaskType.EXPLORING
 			&& personality.currentTask != TaskType.CRAFTING
-			&& personality.currentTask != TaskType.STRIP_MINE) {
+			&& personality.currentTask != TaskType.STRIP_MINE
+			&& personality.currentTask != TaskType.SMELTING
+			&& personality.currentTask != TaskType.FOLLOW_PLAYER
+			&& personality.currentTask != TaskType.COMBAT) {
 			return;
 		}
 		if (player.currentScreenHandler != player.playerScreenHandler) return;

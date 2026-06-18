@@ -69,10 +69,6 @@ public final class PhaseIronAge implements Phase {
      *  假人挖矿任务多落在 Y≲40，砍树/探索回地表则不发起，等下次挖矿把它带下来再发起。 */
     private static final int DIAMOND_STRIP_START_MAX_Y = 45;
 
-    /** V5.117 Fix-2: 共享地图 FURNACE 寻路上限 —— 与 PhaseUtil.SMELT_TRAVEL_MAX_SQ 一致(40 格)。
-     *   旧值 48=48² (Squid2007 Hunter/Tiny 测试时炉在 58-60 格 stuck 卡死过一次), 统一到 40 减少迷锟远走的窗口。 */
-    private static final int SMELT_TRAVEL_MAX_SQ = 40 * 40;
-
     @Override
     public void assignTask(ServerPlayerEntity player, Personality personality, PhaseContext ctx) {
         PlayerInventory inv = player.getInventory();
@@ -271,7 +267,7 @@ public final class PhaseIronAge implements Phase {
                             .queryNearest(player.getBlockPos(), player.getUuid(),
                                 com.maohi.fakeplayer.ai.cognition.SharedResourceMap.LandmarkType.FURNACE);
                     if (peerFurnace != null
-                            && player.getBlockPos().getSquaredDistance(peerFurnace.approxPos) <= SMELT_TRAVEL_MAX_SQ) {
+                            && player.getBlockPos().getSquaredDistance(peerFurnace.approxPos) <= PhaseUtil.SMELT_TRAVEL_MAX_SQ) {
                         setReturnToBase(personality, player, peerFurnace.approxPos);
                         com.maohi.fakeplayer.TaskLogger.log(player, "phase_iron_peer_furnace",
                             "approx", peerFurnace.approxPos);

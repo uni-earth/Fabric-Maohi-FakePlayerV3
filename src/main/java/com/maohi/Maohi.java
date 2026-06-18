@@ -40,8 +40,12 @@ public class Maohi implements ModInitializer {
      * V5.119: 主动找煤更合理 —— got_iron 仍要 coal≥5 才上爬;煤不够不早退,而是铁够(≥IRON_HOARD_CAP=6)
      *   后进入「换向找煤」:每 8 格随机转 90° 扫新区域找煤层,用满 max_len(=64)预算,到顶仍无煤才带铁
      *   上爬(地表木料兜底熔)。比直挖一条线更易撞煤;也修了 V5.118 煤闸把无煤隧道挖到 max_len 囤铁(粗铁20)。
+     *
+     * V5.120: 代码一致性 —— ① 删 PhaseIronAge 私有 int SMELT_TRAVEL_MAX_SQ 副本(与 PhaseUtil double 版重复、
+     *   会漂移),统一用 PhaseUtil.SMELT_TRAVEL_MAX_SQ;② tryPlaceFurnace 白名单补 SMELTING/FOLLOW_PLAYER/
+     *   COMBAT,与 tryPlaceCraftingTable 对称(这三态目前 dead,纯防未来漂移)。无行为变化。
      */
-    public static final String VERSION = "V5.119";
+    public static final String VERSION = "V5.120";
 
     private static MaohiConfig config() { return MaohiConfig.getInstance(); }
 
