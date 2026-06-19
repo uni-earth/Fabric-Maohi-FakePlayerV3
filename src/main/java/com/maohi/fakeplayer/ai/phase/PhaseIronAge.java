@@ -65,9 +65,11 @@ public final class PhaseIronAge implements Phase {
     /** 扫描附近工作台的半径（判断能否原地合熔炉） */
     private static final int WORKBENCH_SCAN_RADIUS = 6;
 
-    /** V5.84: 钻石下挖只在此 Y 及以下发起 —— 下挖距离短、2 把健康铁镐够用，避免从地表起白挖。
-     *  假人挖矿任务多落在 Y≲40，砍树/探索回地表则不发起，等下次挖矿把它带下来再发起。 */
-    private static final int DIAMOND_STRIP_START_MAX_Y = 45;
+    /** V5.84/V5.124: 钻石下挖在此 Y 及以下发起。原值 45 是死闸 —— 假人每次条形挖矿后都 ASCEND 回地表(Y>45),
+     *  且 strip-mine 期间 assignRandomTask 早退,故 P4.6 只在地表被评估、Y≤45 永不满足 → 永不下钻石。
+     *  V5.124 抬到 72(海平面+缓冲),让基地/地表满甲假人能直接发起下挖(DESCEND 自地表一路到 Y-54,
+     *  竖直留在已加载区块、tickDescend 边挖边拾圆石自供)。> 72 的山顶假人等挖矿/探索把它带低再发起。 */
+    private static final int DIAMOND_STRIP_START_MAX_Y = 72;
 
     @Override
     public void assignTask(ServerPlayerEntity player, Personality personality, PhaseContext ctx) {

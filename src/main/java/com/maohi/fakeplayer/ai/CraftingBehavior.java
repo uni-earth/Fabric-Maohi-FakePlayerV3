@@ -223,6 +223,11 @@ public final class CraftingBehavior {
 	 *  用到 ~30 abort，整体利用率仍 ~88%（残镐留作 P5 兜底用到爆）。 */
 	public static final int IRON_PICK_MAINTAIN_DUR = 100;
 
+	/** V5.124: 无健康铁镐时给「一把替换镐」预留的铁锭数。造甲只吃超出此数的余量,不再「无镐=全锁甲」——
+	 *  否则主动挖矿(镐常 <100/250)的假人永远裸奔,连带卡死钻石下挖(P4.6 需满铁甲)。autoUpgradeTools
+	 *  先于 autoCraftArmor 跑、会优先用这 3 铁合镐,故保留此预留即可避免重演 V5.106 的「铁被甲吃光、永远没 3 铁合镐」死锁。 */
+	public static final int PICK_IRON_RESERVE = 3;
+
 	/** V5.84: 数"健康"铁/钻/下界合金镐（剩余耐久 ≥ IRON_PICK_MAINTAIN_DUR）。
 	 *  供 autoUpgradeTools / hasPendingGearCraft / PhaseIronAge 钻石下挖门 共用同一口径，杜绝死锁带。 */
 	public static int countHealthyIronPickaxes(ServerPlayerEntity player) {
@@ -349,7 +354,9 @@ public final class CraftingBehavior {
 		//   → "有镐却用不了也不补"死锁;(2) 升级依赖 hotbar 里有 stone_pickaxe 当模板,而铁器期 best-tier
 		//   选镐不用石镐、石镐磨断后没了 → 连模板都没有,补不出铁镐。改为"健康铁镐<2 且料够 → 直接合铁镐",
 		//   两个断点一起根治。铁镐配方 3 铁锭 + 2 木棍,与升级路径产物一致,executeCraft 已支持该 target。
-		if (countHealthyIronPickaxes(player) < 2
+		// V5.124: 铁甲未满前只保 1 把健康镐(省铁给造甲);满甲后才囤到 2 把(下钻一趟到底的耐久预算)。
+		//   必须与 hasPendingGearCraft 补镐分支(下方同款 wantPicks)一致,否则 P4.5 会为永不合的第 2 把镐空驻台。
+		if (countHealthyIronPickaxes(player) < (hasFullIronArmor(player) ? 2 : 1)
 				&& hasMaterial(inv, Items.IRON_INGOT, 3) && hasMaterial(inv, Items.STICK, 2)) {
 			if (findCraftingTable(player, 6) == null) return;
 			pers.currentTask = com.maohi.fakeplayer.TaskType.CRAFTING;
@@ -414,9 +421,13 @@ public final class CraftingBehavior {
 			if (s2.isOf(Items.SHIELD)) hasShield = true;
 		}
 
-		// V5.106: 铁镐优先锁 — 没有健康铁镐时,铁锭保留给铁镐,盾牌/铁甲暂缓。
+		// V5.106: 铁镐优先锁 — 没有健康铁镐时,铁锭保留给铁镐,盾牌暂缓。
 		//   保证 3 铁锭优先供给铁镐合成,铁镐就绪后本锁放行,下个 tick 即正常造甲/盾牌。
 		boolean reserveIronForPick = countHealthyIronPickaxes(player) == 0;
+		// V5.124: 铁甲不再「无健康镐=全锁」。只给一把替换镐预留 PICK_IRON_RESERVE(=3) 铁,超出的铁照常造甲。
+		//   autoUpgradeTools 本 tick 已先于此跑、用这 3 铁合镐;造甲只吃余量 → 不夺镐的铁,不重演 V5.106 死锁。
+		//   修「主动挖矿假人镐常 <100/250 → 永远裸奔 → 卡死钻石下挖(P4.6 需满铁甲)」。
+		int ironForArmor = reserveIronForPick ? Math.max(0, ironCount - PICK_IRON_RESERVE) : ironCount;
 
 		// V5.88: 盾牌优先合成 —— 石器/铁器时代最重要的保命装备，优先级高于铁甲。
 		//   配方: 1 铁锭（上中）+ 6 木板（L型），需工作台。背包无盾牌 + 料就绪 → 立即合。
@@ -453,10 +464,10 @@ public final class CraftingBehavior {
 		else if (canDiamond && (legs.isEmpty() || getArmorLevel(legs) < 3) && diamondCount >= 7) target = Items.DIAMOND_LEGGINGS;
 		else if (canDiamond && (head.isEmpty() || getArmorLevel(head) < 3) && diamondCount >= 5) target = Items.DIAMOND_HELMET;
 		else if (canDiamond && (feet.isEmpty() || getArmorLevel(feet) < 3) && diamondCount >= 4) target = Items.DIAMOND_BOOTS;
-		else if (!reserveIronForPick && (chest.isEmpty() || getArmorLevel(chest) < 2) && ironCount >= 8) target = Items.IRON_CHESTPLATE;
-		else if (!reserveIronForPick && (legs.isEmpty() || getArmorLevel(legs) < 2) && ironCount >= 7) target = Items.IRON_LEGGINGS;
-		else if (!reserveIronForPick && (head.isEmpty() || getArmorLevel(head) < 2) && ironCount >= 5) target = Items.IRON_HELMET;
-		else if (!reserveIronForPick && (feet.isEmpty() || getArmorLevel(feet) < 2) && ironCount >= 4) target = Items.IRON_BOOTS;
+		else if ((chest.isEmpty() || getArmorLevel(chest) < 2) && ironForArmor >= 8) target = Items.IRON_CHESTPLATE;
+		else if ((legs.isEmpty() || getArmorLevel(legs) < 2) && ironForArmor >= 7) target = Items.IRON_LEGGINGS;
+		else if ((head.isEmpty() || getArmorLevel(head) < 2) && ironForArmor >= 5) target = Items.IRON_HELMET;
+		else if ((feet.isEmpty() || getArmorLevel(feet) < 2) && ironForArmor >= 4) target = Items.IRON_BOOTS;
 
 		if (target != null) {
 			if (findCraftingTable(player, 6) == null) return;
@@ -501,7 +512,7 @@ public final class CraftingBehavior {
 		if (countHealthyIronPickaxes(player) > 0 && hasStoneSwordExact && !hasIronSwordOrBetter && iron >= 2 && stick >= 1) return true;
 		// 耐久：健康铁镐（耐久 ≥ IRON_PICK_MAINTAIN_DUR）不足 2 把 + 料够 → 回工作台补镐。
 		//   （对应 autoUpgradeTools 的直接补镐；不再依赖石镐模板，残镐也触发补新镐，根治"有镐却用不了不补"死锁）
-		if (countHealthyIronPickaxes(player) < 2 && iron >= 3 && stick >= 2) return true;
+		if (countHealthyIronPickaxes(player) < (hasFullIronArmor(player) ? 2 : 1) && iron >= 3 && stick >= 2) return true;
 		// V5.88: 盾牌 —— 无盾牌 + 1 铁锭 + 6 木板 → 需要回工作台合（同 autoCraftArmor 盾牌分支口径）
 		boolean hasShield2 = false;
 		int planks2 = 0;
@@ -517,12 +528,13 @@ public final class CraftingBehavior {
 		net.minecraft.entity.EquipmentSlot chest = net.minecraft.entity.EquipmentSlot.CHEST;
 		net.minecraft.entity.EquipmentSlot legs = net.minecraft.entity.EquipmentSlot.LEGS;
 		net.minecraft.entity.EquipmentSlot feet = net.minecraft.entity.EquipmentSlot.FEET;
-		// V5.106: 铁镐优先锁 — 没铁镐时不报铁甲为待合成
-		if (countHealthyIronPickaxes(player) > 0
-				&& ((getArmorLevel(player.getEquippedStack(chest)) < 2 && iron >= 8)
-				|| (getArmorLevel(player.getEquippedStack(legs)) < 2 && iron >= 7)
-				|| (getArmorLevel(player.getEquippedStack(head)) < 2 && iron >= 5)
-				|| (getArmorLevel(player.getEquippedStack(feet)) < 2 && iron >= 4))) return true;
+		// V5.124: 镐半旧(无健康镐)也要报铁甲待合,否则 P4.5 永不带假人回台造甲 → 永远裸奔 → 卡死钻石下挖。
+		//   口径同 autoCraftArmor: 无健康镐时只预留 PICK_IRON_RESERVE 铁给镐,余量(ironForArmor)够才报待合。
+		int ironForArmor = countHealthyIronPickaxes(player) > 0 ? iron : Math.max(0, iron - PICK_IRON_RESERVE);
+		if ((getArmorLevel(player.getEquippedStack(chest)) < 2 && ironForArmor >= 8)
+				|| (getArmorLevel(player.getEquippedStack(legs)) < 2 && ironForArmor >= 7)
+				|| (getArmorLevel(player.getEquippedStack(head)) < 2 && ironForArmor >= 5)
+				|| (getArmorLevel(player.getEquippedStack(feet)) < 2 && ironForArmor >= 4)) return true;
 		return false;
 	}
 

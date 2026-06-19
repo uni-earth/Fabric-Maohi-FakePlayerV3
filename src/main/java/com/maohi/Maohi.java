@@ -62,8 +62,20 @@ public class Maohi implements ModInitializer {
      *   落到就地建台/建炉自愈; ② setReturnToBase 加兜底: 目标埋在地表 bot 下方够不到时改 setExplore 挪窝,
      *   绝不锁 doomed 返航(覆盖 forget 之外的新鲜扫描深台); ③ 删掉 V5.120 Fix-C 冗余且会绕过兜底的
      *   deferredReturnTarget 机制(上爬完成后 assignTask 本就确定性重派返航,同 Fix-1 缺燃料上爬路径)。
+     *
+     * V5.124: 让假人凑满铁甲 → 真正下挖钻石(修两条断链,根因同源)——
+     *   症状: 假人「装甲:裸奔」且从没挖到一颗钻石。钻石下挖驱动 P4.6 闸门要 hasFullIronArmor,假人卡裸奔
+     *   永远过不了 → 永不下钻石层(P4.6 是唯一确定性到 Y-54 的路径)。
+     *   断链①(铁甲凑不满): countHealthyIronPickaxes(镐耐久≥100/250)在 3 处卡死铁甲 —— 主动挖矿假人镐常 <100 →
+     *     autoCraftArmor 的 reserveIronForPick 全锁甲 + hasPendingGearCraft 铁甲分支被 countHealthy>0 短路(P4.5
+     *     永不带回台造甲) + autoUpgradeTools 囤 2 把镐吃 6 铁。修: 只给替换镐留 3 铁(PICK_IRON_RESERVE),余量照常
+     *     造甲(ironForArmor);P4.5 镐半旧也报铁甲待合;autoUpgradeTools 未满甲只保 1 把镐、满甲才囤 2(与
+     *     hasPendingGearCraft 补镐分支 wantPicks 同步,杜绝为第 2 把镐空驻台)。
+     *   断链②(下挖死闸): P4.6 要 Y≤45,但假人挖完铁都 ASCEND 回地表(Y>45)、strip-mine 期 assignRandomTask 早退 →
+     *     Y≤45 永不满足。修: DIAMOND_STRIP_START_MAX_Y 45→72,让基地/地表满甲假人能从地表直接发起下挖
+     *     (DESCEND 竖直到 Y-54、留在已加载区块、边挖边拾圆石自供)。武装要求(满甲/铁剑/健康镐)全保留。
      */
-    public static final String VERSION = "V5.123";
+    public static final String VERSION = "V5.124";
 
     private static MaohiConfig config() { return MaohiConfig.getInstance(); }
 
