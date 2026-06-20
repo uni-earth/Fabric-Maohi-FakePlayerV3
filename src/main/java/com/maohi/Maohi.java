@@ -85,8 +85,21 @@ public class Maohi implements ModInitializer {
      *     短路,criteria_trigger_fail 每 JVM 仅一条(成就本由 AchievementSimulator + loader 枚举兜底,无功能损失)。
      *   Fix-4(autoCraftStoneTools 步10): 木锄加 hasStonePickaxe 守卫 —— 无主力镐的 bot 不再把 2 木板浪费成锄
      *     (FrostSky 重建期合 wooden_hoe);木锄回归「成熟矿工的成就锦上添花」定位。
+     *
+     * V5.126: 深挖 A* 修「moved30s=0 够不到远/高目标」导航卡顿(部署 V5.125 后 4 假人全 moved30s=0、
+     *   NetherGuard 完全冻住)。根因: MAX_SEARCH_STEPS=512 + 未加权启发 → 远目标(74-96 格)预算耗尽到不了,
+     *   回退 partial path 最近节点离起点没几格 → 一步极小。修(PathfindingNavigation):
+     *   ① 加权 A* HEURISTIC_WEIGHT=1.7(贪心偏置,startNode + newF 两处 f=g+W*h)—— 同预算内更可靠够到远/坡上
+     *      目标,partial path 步子也更大;CPU 中性。② MAX_SEARCH_STEPS 512→768 保守加余量(缓存+冷却兜底,
+     *      若 LagWatchdog 增多可回退 512)。纯竖直崖壁目标仍非寻路能解(留作后续「快速放弃」互补)。
+     *
+     * V5.127: 撞墙柱式上爬兜底 —— 接 V5.126 诚实边界(峭壁/坎上目标寻路够不到)。MovementController 撞到
+     *   不可跳的墙(≥2 格高)且最终目标在上方、就近(distSq≤64)、头顶 2 格空、有圆石/土时,镜像
+     *   StripMineBehavior.tickAscend 柱式搭一格往上爬(复用 placeCobble,去 private 改包级可见),而非直接
+     *   stopMovement 放弃、干等 ~30s stage-2 stuck_teleport。让 bot 能爬上矮坎够到坡/坎上的树/工作台
+     *   (Chloe 树在坎上够不到即此)。搭块即重置 stuckTicks 防被 teleport 打断;搭不上则退回原位走原放弃逻辑。
      */
-    public static final String VERSION = "V5.125";
+    public static final String VERSION = "V5.127";
 
     private static MaohiConfig config() { return MaohiConfig.getInstance(); }
 

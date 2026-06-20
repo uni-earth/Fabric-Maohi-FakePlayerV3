@@ -592,7 +592,30 @@ public class MovementController {
 					p.addVelocity(ndx / ndist * 0.1, 0, ndz / ndist * 0.1);
 				}
 			} else {
-				// 无法跳越：清路径，下次重新计算
+				// V5.127: 撞不可跳的墙(≥2 格高)+ 最终目标在上方且就近 → 柱式搭一格往上爬(复用
+				//   StripMineBehavior.placeCobble),让 bot 爬上矮坎够到坡/坎上的树/工作台,而非直接放弃、
+				//   干等 ~30s stuck_teleport(Chloe 树在坎上够不到即此)。镜像 tickAscend:先上移 1 格再填脚位块。
+				//   边界:目标水平 ≤8 格(distSq≤64,不为远目标乱搭塔)+ 比脚高 >1 + 不超目标高 + 头顶 2 格空 + 在地面 + 有圆石/土。
+				BlockPos pfeet = p.getBlockPos();
+				boolean pillarOk = pers != null
+					&& target != null
+					&& target.getY() > p.getBlockY() + 1
+					&& p.getBlockY() < target.getY()
+					&& distSq <= 64.0
+					&& p.isOnGround()
+					&& world.getBlockState(pfeet.up(1)).getCollisionShape(world, pfeet.up(1)).isEmpty()
+					&& world.getBlockState(pfeet.up(2)).getCollisionShape(world, pfeet.up(2)).isEmpty();
+				if (pillarOk) {
+					p.requestTeleport(pfeet.getX() + 0.5, pfeet.getY() + 1, pfeet.getZ() + 0.5);
+					if (StripMineBehavior.placeCobble(p, pfeet)) {
+						pers.stuckTicks = 0;       // 柱式上爬是有效进展,别让 stage-2 teleport 打断
+						pers.currentPath.clear();  // 高度变了,下 tick 从新位置重算路径
+						logMoveLatchOnce(p, pers, "pillar_up", "botY", p.getBlockY(), "targetY", target.getY());
+						return true;
+					}
+					p.requestTeleport(pfeet.getX() + 0.5, pfeet.getY(), pfeet.getZ() + 0.5); // 搭不上 → 退回原位
+				}
+				// 无法跳越且不满足柱式上爬:清路径,下次重新计算
 				if (pers != null) pers.currentPath.clear();
 				stopMovement(p);
 				return false; // 不放弃任务，等下次 tick 重算路径

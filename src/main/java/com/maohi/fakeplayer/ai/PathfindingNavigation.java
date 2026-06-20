@@ -54,7 +54,12 @@ public class PathfindingNavigation {
 	//   partial path 只缓存 1s(PATH_CACHE_PARTIAL_TTL_NS),让 bot 走出 8 格分桶后
 	//   立刻重新寻路,而不是拿旧中继点反复走原地踏步。
 	//   对已在 22 格内的短距目标,512 步通常直接命中,行为与旧版完全一致。
-	private static final int MAX_SEARCH_STEPS = 512;
+	private static final int MAX_SEARCH_STEPS = 768;
+
+	/** V5.126: 加权 A* 系数(>1 = 贪心偏置)。让 A* 优先朝目标方向展开 —— 同等节点预算内更可靠够到
+	 *  远(74-96 格)/坡上目标;即便耗尽预算,visited 最近节点也离 goal 更近 → partial path 步子更大、更有用。
+	 *  代价:路径略次优(可能绕一点),对「能走到就行」完全可接受。修「moved30s=0 够不到远/高目标」导航卡顿。 */
+	private static final double HEURISTIC_WEIGHT = 1.7;
 
 	/** 路径缓存 TTL(完整路径) */
 	private static final long PATH_CACHE_TTL_NS = 5_000_000_000L; // 5 秒
@@ -362,7 +367,7 @@ public class PathfindingNavigation {
 		PriorityQueue<AStarNode> openSet = new PriorityQueue<>(Comparator.comparingDouble(n -> n.f));
 		Map<Long, AStarNode> visited = new HashMap<>();
 
-		AStarNode startNode = new AStarNode(start, 0, heuristic(start, goal), null);
+		AStarNode startNode = new AStarNode(start, 0, HEURISTIC_WEIGHT * heuristic(start, goal), null);
 		openSet.add(startNode);
 		// P22 修复:visited key 改 BlockPos.asLong() (vanilla 26X+12Y+26Z bit-packed long)。
 		//   原 blockPosKey 只打 X/Z,getNeighbors 含 up/down/up(2) 时同一 XZ 列不同 Y 节点折叠
@@ -424,7 +429,7 @@ public class PathfindingNavigation {
 				//   避免 0.6 宽 hitbox 在双侧封死的内凹墙角对角通行时撞墙原地不动。
 				if (!isDiagonalUpReachable(world, current.pos, nb.pos)) continue;
 
-				double newF = tentativeG + heuristic(nb.pos, goal);
+				double newF = tentativeG + HEURISTIC_WEIGHT * heuristic(nb.pos, goal);
 				AStarNode neighborNode = new AStarNode(nb.pos, tentativeG, newF, current);
 
 				visited.put(key, neighborNode);

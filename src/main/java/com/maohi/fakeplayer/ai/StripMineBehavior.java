@@ -350,7 +350,8 @@ public class StripMineBehavior {
         }
     }
 
-    private static boolean placeCobble(ServerPlayerEntity player, BlockPos pos) {
+    // V5.127: 去 private 改包级可见,供 MovementController 撞墙柱式上爬复用(同包 com.maohi.fakeplayer.ai)。
+    static boolean placeCobble(ServerPlayerEntity player, BlockPos pos) {
         // Find cobble in inventory
         int cobbleSlot = -1;
         for (int i = 0; i < player.getInventory().size(); i++) {
