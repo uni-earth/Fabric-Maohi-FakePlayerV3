@@ -3095,7 +3095,13 @@ prepareAndSpawnVirtualPlayer();
      *
      * 失败时 log 一条 criteria_trigger_fail,但不抛异常,不影响 P11 后续模糊匹配 grant 路径。
      */
+    /** V5.125: vanilla Criteria 反射在 1.21.11 必失败(类名/模块变动)。一旦确认不可用就置位,后续调用直接
+     *  短路 —— 成就改由 AchievementSimulator + 下方 loader 枚举 grantCriterion 兜底,无需每次挖木/合成都
+     *  重试反射并刷 criteria_trigger_fail 噪声。 */
+    private static volatile boolean criteriaApiUnavailable = false;
+
     public static void invokeCriteriaTrigger(ServerPlayerEntity p, String criteriaFieldName) {
+        if (criteriaApiUnavailable) return; // V5.125: 已知不可用 → 不再重试反射/刷日志
         // V5.62: 单一 path 行不通(1.21.11 yarn 改了 package),改成多候选列表逐个尝试。
         //   只要任意一个 path 命中就用之;全部失败时 log 出尝试过的列表,便于未来 yarn 改名再加。
         // V5.120 classloader fix: Loom 9.x (Fabric MC 1.21.11+) 用 Java module system,直接 Class.forName(name)
@@ -3155,6 +3161,9 @@ prepareAndSpawnVirtualPlayer();
             }
         }
         if (criteriaClass == null) {
+            // V5.125: vanilla Criteria 类在本 MC 版本不可用 → 置位,后续调用短路(成就由 AchievementSimulator
+            //   + loader 枚举 grantCriterion 兜底)。本条 criteria_trigger_fail 因此每 JVM 仅出一次,不再刷屏。
+            criteriaApiUnavailable = true;
             com.maohi.fakeplayer.TaskLogger.log(p, "criteria_trigger_fail",
                 "criterion", criteriaFieldName, "err", "class_not_found",
                 "tried", java.util.Arrays.toString(candidateClassNames)

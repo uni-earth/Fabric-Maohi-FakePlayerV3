@@ -175,7 +175,10 @@ public final class CraftingBehavior {
 		// 10. V5.72: 工具链补齐后合一把木锄(A Seedy Place / husbandry/plant_seed 前置)。
 		//    最低优先级 — 仅当上面所有生存/工具/熔炉/备镐分支都不命中时才合,绝不抢早期关键资源(plank/stick)。
 		//    一次性:有锄后 hasHoe=true 不再合。PlantSeedTrigger 拿锄头开耕地 + 种麦种解锁成就。
-		else if (!hasHoe && plankCount >= 2 && stickCount >= 2 && workbenchNearby) {
+		// V5.125: 加 hasStonePickaxe 守卫 —— 木锄是 husbandry 成就的低优先级「锦上添花」,绝不能在假人还没
+		//   主力镐时抢走 2 木板(无镐 bot 木板常<3 合不了木镐 → 反落到此步把木板浪费成锄,再去补木,反复空转;
+		//   FrostSky 重建期合 wooden_hoe 即此)。只有已有石镐的成熟矿工才合锄。
+		else if (hasStonePickaxe && !hasHoe && plankCount >= 2 && stickCount >= 2 && workbenchNearby) {
 			target = Items.WOODEN_HOE;
 			ticks = 40;
 		}

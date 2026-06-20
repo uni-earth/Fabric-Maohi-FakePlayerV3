@@ -301,7 +301,11 @@ public class StripMineBehavior {
         ServerWorld world = player.getEntityWorld();
         BlockPos pos = player.getBlockPos();
 
-        if (world.isSkyVisible(pos.up()) || pos.getY() >= pers.stripMineStartY - 3) {
+        // V5.125: isSkyVisible 仅在「已接近地表」时才算到顶 —— 深裂谷/天坑底(Y15 却开口见天)否则会被误判
+        //   上爬完成,假人卡谷底够不到树/基地(GrumpyBrave [铁器] Y15 卡死)。主判定仍是 Y>=startY-3;
+        //   见天只在距目标地表 ≤12 格内才认可早停(山坡侧出),其余继续柱式上爬到 startY 附近。
+        if ((world.isSkyVisible(pos.up()) && pos.getY() >= pers.stripMineStartY - 12)
+                || pos.getY() >= pers.stripMineStartY - 3) {
             pers.stripMineState = null;
             pers.currentTask = TaskType.IDLE;
             return;

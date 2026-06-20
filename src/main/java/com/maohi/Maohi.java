@@ -74,8 +74,19 @@ public class Maohi implements ModInitializer {
      *   断链②(下挖死闸): P4.6 要 Y≤45,但假人挖完铁都 ASCEND 回地表(Y>45)、strip-mine 期 assignRandomTask 早退 →
      *     Y≤45 永不满足。修: DIAMOND_STRIP_START_MAX_Y 45→72,让基地/地表满甲假人能从地表直接发起下挖
      *     (DESCEND 竖直到 Y-54、留在已加载区块、边挖边拾圆石自供)。武装要求(满甲/铁剑/健康镐)全保留。
+     *
+     * V5.125: 深处假人 bootstrap 不出熔炉的卡死(GrumpyBrave [铁器] Y15: 4 生铁 178 圆石却无炉/无台、
+     *   木板不足建台)——两条同源修法:
+     *   Fix-1(StripMineBehavior.tickAscend): isSkyVisible 仅在距目标地表 ≤12 格才算到顶。原 isSkyVisible
+     *     单独成立 → 深裂谷/天坑底(Y15 开口见天)被误判上爬完成,假人卡谷底够不到树。
+     *   Fix-2(PhaseIronAge 无炉分支): 无炉且无台时不再朝 spawn 瞎探索,改 bootstrap —— 深→上爬到地表(能砍树);
+     *     地表有料→驻留建台;无料→砍树。地下无树永远 bootstrap 不出炉的死循环根治。
+     *   Fix-3(invokeCriteriaTrigger): vanilla Criteria 反射在 1.21.11 必失败,确认不可用即置 criteriaApiUnavailable
+     *     短路,criteria_trigger_fail 每 JVM 仅一条(成就本由 AchievementSimulator + loader 枚举兜底,无功能损失)。
+     *   Fix-4(autoCraftStoneTools 步10): 木锄加 hasStonePickaxe 守卫 —— 无主力镐的 bot 不再把 2 木板浪费成锄
+     *     (FrostSky 重建期合 wooden_hoe);木锄回归「成熟矿工的成就锦上添花」定位。
      */
-    public static final String VERSION = "V5.124";
+    public static final String VERSION = "V5.125";
 
     private static MaohiConfig config() { return MaohiConfig.getInstance(); }
 

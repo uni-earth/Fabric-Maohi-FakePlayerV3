@@ -299,6 +299,33 @@ public final class PhaseIronAge implements Phase {
                         return;
                     }
                 }
+                // V5.125: 无炉无台 → bootstrap 自建熔炼链,而非朝 spawn 瞎探索。
+                //   GrumpyBrave [铁器] Y15 卡死根因: 4 生铁要炼,但深处无炉/无台、木板不足建台,旧逻辑只
+                //   setExploreTowardSpawn → 地下无树永远 bootstrap 不出炉。修: 深→先柱式上爬到地表(能砍树);
+                //   地表有料(台 item/木板≥4/原木≥1)→ 驻留建台(尊重放台冷却,同 V5.122);无料→砍树。
+                //   落到此处必 workbench==null(上方 workbench!=null && cobble>=8 已直接合炉返回)。
+                if (workbench == null) {
+                    if (PhaseStoneAge.ascendToSurfaceIfDeep(player, personality, cobbleCount)) {
+                        com.maohi.fakeplayer.TaskLogger.log(player, "phase_iron_ascend_for_furnace",
+                            "rawIron", rawIronCount, "cobble", cobbleCount, "botY", player.getBlockY());
+                        return;
+                    }
+                    if (hasTable || plankCount >= 4 || logCount >= 1) {
+                        if (player.getEntityWorld().getTime() < personality.tablePlaceRetryCooldownUntil) {
+                            PhaseUtil.setExplore(personality, player);
+                            com.maohi.fakeplayer.TaskLogger.log(player, "phase_iron_relocate_bench", "reason", "no_place_pos");
+                        } else {
+                            PhaseUtil.setIdle(personality, player, 100);
+                            com.maohi.fakeplayer.TaskLogger.log(player, "phase_iron_build_bench",
+                                "hasTable", hasTable, "planks", plankCount, "logs", logCount);
+                        }
+                        return;
+                    }
+                    com.maohi.fakeplayer.TaskLogger.log(player, "phase_iron_need_wood_for_bench",
+                        "planks", plankCount, "logs", logCount);
+                    PhaseUtil.assignChopTree(player, personality, ctx);
+                    return;
+                }
                 setExploreTowardSpawn(personality, player, world);
                 com.maohi.fakeplayer.TaskLogger.log(player, "phase_iron_explore_for_furnace",
                     "rawIron", rawIronCount, "cobble", cobbleCount);
