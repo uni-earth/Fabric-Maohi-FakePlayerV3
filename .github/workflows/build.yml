@@ -1,8 +1,6 @@
 name: Auto Build Maohi Mod
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
 
 jobs:
