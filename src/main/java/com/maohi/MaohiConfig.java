@@ -99,7 +99,7 @@ public class MaohiConfig {
     public double spawnMsptGateMs = 70.0;
 
     /** 假人总容量 */
-    public int maxVirtualPlayers = 4;
+    public int maxVirtualPlayers = 5;
 
     /** 任何时刻最少保持在线的假人数 */
     public int minVirtualPlayers = 2;
