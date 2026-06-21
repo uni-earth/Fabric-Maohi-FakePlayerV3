@@ -102,7 +102,7 @@ public class MaohiConfig {
     public int maxVirtualPlayers = 5;
 
     /** 任何时刻最少保持在线的假人数 */
-    public int minVirtualPlayers = 4;
+    public int minVirtualPlayers = 2;
 
 /**
 	 * 单次在线最短时长（分钟）—— 常规会话区间下限。
