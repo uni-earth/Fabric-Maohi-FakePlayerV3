@@ -283,12 +283,7 @@ public class VirtualPlayerManager {
 		//   原实现:这里 continue 后 processHeavyAILogic 根本不会被调,内部那条 warn 永远不打 →
 		//   外面看到的现象是"假人能聊天但永远不动",诊断像挤牙膏。现在外层熔断也打日志。
 		long now = System.currentTimeMillis();
-		if (now - lastMsptThrottleWarnAt > 30_000L) {
-			lastMsptThrottleWarnAt = now;
-			org.slf4j.LoggerFactory.getLogger("Server thread").warn(
-				"[MaohiTask] mspt_throttle_outer mspt={} bots={} — AI loop 整轮跳过(此后 30s 内同事件不再重复)",
-				String.format("%.1f", mspt), virtualPlayerUUIDs.size());
-		}
+
 		// V5.40 启动 fastpath:即使重卡熔断,也给 spawn 后 30s 内未 phase_change 的 bot
 		//   走一次轻量 reassign(每 5s wall-clock 一次)。原行为:totalTicks 在熔断期不递增,
 		//   reassign 周期(totalTicks % 100 == 0)永远不满足 → bot 卡 IDLE 17min 才 phase_change。
@@ -611,13 +606,7 @@ prepareAndSpawnVirtualPlayer();
         if (shouldThrottle(mspt)) {
             // V5.30+ 诊断:节流过的 warn,30s 最多一条,告诉运维"AI 整轮跳了"。
             //   不打,从外面看到的现象就是"假人聊天/login 还在但没动作没日志",诊断像挤牙膏。
-            long now = System.currentTimeMillis();
-            if (now - lastMsptThrottleWarnAt > 30_000L) {
-                lastMsptThrottleWarnAt = now;
-                org.slf4j.LoggerFactory.getLogger("Server thread").warn(
-                    "[MaohiTask] mspt_throttle mspt={} bots={} — AI tick skipped (此后 30s 内同事件不再重复)",
-                    String.format("%.1f", mspt), virtualPlayerUUIDs.size());
-            }
+
             return; // 重卡直接整体跳过本轮 AI
         }
         boolean skipLowPriority = mspt > 50;
