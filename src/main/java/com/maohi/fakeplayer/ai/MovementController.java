@@ -323,7 +323,17 @@ public class MovementController {
 					//   日志证据(09:07~09:13): 5 bot 6 分钟反复 sink_guard 60+ 次,yaw 已覆盖 360°,
 					//     bot 全 0 mined。说明 spawn 周围方圆几十格都是 cave 海,就地救没用。
 					//   远征跨度 500-1500 格 = 30+ chunk,触发 chunk gen 主线程负载,但比死循环可接受。
-					if (pers.sinkGuardConsecutiveCount >= 3) {
+					// V5.194 (①海洋 spawn churn 修): 木器时代「整队迁移」是激活的 escape 机制时(未锁家 + 开启),
+					//   深水连沉的 bot 不做各自 500-1500 格远传 —— 那会把整队打散成 4 个 chunk-gen 前沿(散射
+					//   churn = 当前海洋 spawn 崩服机制)、违背 fleet 迁移「单 chunk 前沿」不变量。改落到下面
+					//   near-rescue 原地上浮(同 x,z 不生成新 chunk),bob 原地等整队迁移(V5.166)把全员一起
+					//   搬到陆地。远传只留给「已锁家 / 非木器」的真·孤立卡死(那时整队迁移不接管)。
+					com.maohi.MaohiConfig sinkFleetCfg = com.maohi.MaohiConfig.getInstance();
+					boolean fleetEscapeActive =
+						pers.growthPhase == GrowthPhase.WOOD_AGE
+						&& sinkFleetCfg != null && sinkFleetCfg.fleetRelocateEnabled
+						&& !com.maohi.fakeplayer.ai.cognition.SharedResourceMap.getInstance().isFleetHomeLocked();
+					if (pers.sinkGuardConsecutiveCount >= 3 && !fleetEscapeActive) {
 						double angle = ThreadLocalRandom.current().nextDouble(0, 2 * Math.PI);
 						double dist = 500.0 + ThreadLocalRandom.current().nextDouble(0, 1000.0);
 						int farX = (int) (pos.x + Math.cos(angle) * dist);
@@ -650,12 +660,12 @@ public class MovementController {
 			//     moved30s=0.00,17 分钟内 logs/sticks/cobble 全 0,完全无成就。
 			//   参数顺序:Vec3d(sideways=x, vertical=y, forward=z) 与 V5.28.6 之前一致,
 			//     vanilla LivingEntity.travel 的入参语义就是 (sideways, vertical, forward)。
-			// V5.62 travel 前置守卫:vanilla LivingEntity.travel → Entity.move →
+			// V5.62/V5.199 travel 前置守卫:vanilla LivingEntity.travel → Entity.move →
 			//   BlockCollisionSpliterator 扫 boundingBox+movement 经过的所有方块,跨未加载
 			//   chunk 边界时调 World.getBlockState → ServerChunkManager.getChunk(create=true)
-			//   → server thread park 1+秒。watchdog 2026-05-27 stack 实抓 doSmartMove:610
-			//   → travel → park 1131ms。守卫:当前 3x3 chunk 全部 ready 才推 travel,否则跳过
-			//   本帧让 chunk 异步加载完(下一 tick 重试)。
+			//   → server thread park。2026-07-18 18:02 watchdog 实抓 doSmartMove:670 → travel →
+			//   getChunkBlocking park(c2me 并行度=1+慢盘 → 1032ms→60s 崩)。V5.199:3x3 守卫已 PASS
+			//   仍崩 → 读到 ±2 chunk,放宽到 5x5 才推 travel,否则跳过本帧让 chunk 异步加载(下一 tick 重试)。
 			if (areTravelChunksReady(p)) {
 				p.travel(new Vec3d(side, 0, fwd));
 			} else {
@@ -690,25 +700,29 @@ public class MovementController {
 	}
 
 	/**
-	 * V5.62: travel 前置守卫 — 检查 bot 当前位置周围 3x3 chunk 是否全部就绪(FULL 状态)。
+	 * V5.62 / V5.199: travel 前置守卫 — 检查 bot 当前位置周围 5x5 chunk 是否全部就绪(FULL 状态)。
 	 *
 	 * <p>vanilla {@code LivingEntity.travel} 内部走 {@code Entity.move} → 碰撞检测,
 	 * {@code BlockCollisionSpliterator} 扫 boundingBox + movement 经过的所有方块。
 	 * 跨未加载 chunk 边界时调 {@code World.getBlockState} → {@code ServerChunkManager.getChunk(create=true)}
-	 * → 主线程 park 等待 chunk gen,实测 1131ms+。
+	 * → 主线程 park 等待 chunk gen,实测 1131ms+;极端(c2me 全局 worldgen 并行度=1 + 慢盘 + 换页)
+	 * 一次 getChunkBlocking 能 park 满 60s → vanilla Server Watchdog 判崩(2026-07-18 18:02 实抓
+	 * doSmartMove:670 → travel → getChunkBlocking,1032ms 后同点 60s 崩)。
 	 *
-	 * <p>3x3 是因为 bot 站 chunk 边界时 boundingBox 可能横跨相邻 chunk;3x3 ready 即覆盖
-	 * 任意 1 格速度的碰撞扫描范围。用 {@link com.maohi.fakeplayer.ai.PathfindingNavigation#isChunkReady}
-	 * (mixin O(1) 非阻塞)而非 vanilla {@code isChunkLoaded}。
+	 * <p><b>V5.199 为何 3x3 → 5x5</b>:2026-07-18 崩点确证 —— 3x3 守卫已 PASS(bot 3x3 全 FULL),
+	 * travel 仍 park,说明 vanilla 碰撞/落地/减速读到的方块落在 <b>3x3 之外</b>(getWorldChunk() 只返
+	 * FULL chunk,不可能对已查 chunk 假阳;故只能是读到了 ±2 的 chunk)。放宽到 5x5(±2)覆盖之。
+	 * 代价:bot 贴近未加载前沿时更常原地等一 tick(交 stuck 阶梯兜底救),远胜 60s 崩服。
 	 *
-	 * <p>未就绪时跳过本帧 travel,bot 站这一 tick;force-load ring 异步扩展完后下一 tick 重试。
+	 * <p>用 {@link com.maohi.fakeplayer.ai.PathfindingNavigation#isChunkReady}(mixin O(1) 非阻塞)
+	 * 而非 vanilla {@code isChunkLoaded}。未就绪时跳过本帧 travel,force-load ring 异步扩展完后下一 tick 重试。
 	 */
 	private static boolean areTravelChunksReady(ServerPlayerEntity p) {
 		ServerWorld w = p.getEntityWorld();
 		int cx = p.getBlockX() >> 4;
 		int cz = p.getBlockZ() >> 4;
-		for (int dx = -1; dx <= 1; dx++) {
-			for (int dz = -1; dz <= 1; dz++) {
+		for (int dx = -2; dx <= 2; dx++) {
+			for (int dz = -2; dz <= 2; dz++) {
 				if (!com.maohi.fakeplayer.ai.PathfindingNavigation.isChunkReady(w, cx + dx, cz + dz)) {
 					return false;
 				}

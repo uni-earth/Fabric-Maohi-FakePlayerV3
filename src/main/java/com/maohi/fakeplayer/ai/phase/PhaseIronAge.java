@@ -67,6 +67,11 @@ public final class PhaseIronAge implements Phase {
      *  仅回收超出此半径的野外遗留炉(整队搬家后的旧炉)。64²:bot 在 fleetHome ±spawnRadius 簇内建炉,足够覆盖。 */
     private static final double FLEET_SMITHY_RADIUS_SQ = 64.0 * 64.0;
 
+    /** V5.198 裸奔保底触发阈值(真游戏 tick):「够料却裸」持续此久 → 服务端强制走完粗铁→锭→合甲→穿。
+     *  1200 tick = ~60s。改自 V5.196 的「40 派发周期」—— 按调用计数受 reassign 5s 底放大到 ≥200s、
+     *  且被长任务(RTB/strip-mine)压制无限拖(同 tick_rate 教训),故切真 tick 墙钟截止。 */
+    private static final long ARMOR_SAFETY_NET_TICKS = 1200L;
+
     /** 扫描附近工作台的半径（判断能否原地合熔炉） */
     private static final int WORKBENCH_SCAN_RADIUS = 6;
 
@@ -122,7 +127,7 @@ public final class PhaseIronAge implements Phase {
                 "task", personality.currentTask,
                 "smState", personality.stripMineState,
                 "smCdSec", cdMs > 0 ? (int) (cdMs / 1000) : 0,
-                "noIronCycles", personality.stoneStableCyclesNoIron,
+                "hasIronPick", hasIronPickaxe,
                 "rawIron", rawIronCount, "ironIngot", ironIngotCount,
                 "hasFurnaceItem", hasFurnaceItem, "knownFurnace", personality.knownFurnacePos != null,
                 "hp", (int) player.getHealth(), "y", player.getBlockY());
@@ -147,6 +152,31 @@ public final class PhaseIronAge implements Phase {
         // V5.83: 缺整套铁甲时把熔炼目标抬到 8 锭（够合胸甲），让假人在"未披甲"阶段持续炼铁攒料
         //   → 铁甲快速成型；备齐铁甲后回落到 4（只维持工具铁锭），释放假人去挖钻石不被熔炼拖住。
         boolean hasFullIronArmor = com.maohi.fakeplayer.ai.CraftingBehavior.hasFullIronArmor(player);
+
+        // ── V5.196 裸奔保底(最高优先级,谁都挤不掉)──
+        //   改 30+ 版还裸奔的真因:铁料/铁锭够了,却被「揣炉放不下 / 合台空转 / 回营空返」等设施放置死锁
+        //   卡住,永远走不完「熔炼→合甲→穿」。补丁堵每个分支堵不完 → 这里加终极兜底:铁器 bot 有够料
+        //   (粗铁+铁锭 ≥ 下一件甲所需)却持续 ~60s(真游戏 tick 墙钟,见 ARMOR_SAFETY_NET_TICKS)仍穿不上甲
+        //   → 服务端直接把这条链走完(粗铁→锭→合缺甲→穿,见 CraftingBehavior.forceCompleteArmorFromStock;
+        //   铁料自己挖的,只保证结果)。现实路径(下面熔炼/合甲/回基地铁匠铺)照跑;兜底只在真卡住时兜。
+        if (!hasFullIronArmor) {
+            int nextArmorCost = com.maohi.fakeplayer.ai.CraftingBehavior.ironTargetForNextArmorPiece(player);
+            if (nextArmorCost > 0 && (rawIronCount + ironIngotCount) >= nextArmorCost) {
+                // V5.198: 真游戏 tick 墙钟截止(非派发计数)—— 免 reassign 5s 底放大 + 免长任务压制无限拖。
+                long nowTick = player.getEntityWorld().getServer().getTicks();
+                if (personality.armorSafetyNetSince == 0L) {
+                    personality.armorSafetyNetSince = nowTick; // 首次「够料却裸」→ 起表
+                } else if (nowTick - personality.armorSafetyNetSince >= ARMOR_SAFETY_NET_TICKS) {
+                    personality.armorSafetyNetSince = nowTick; // 兜完重起表:再给现实路径 ~60s 凑下一件
+                    if (com.maohi.fakeplayer.ai.CraftingBehavior.forceCompleteArmorFromStock(player)) {
+                        return; // 已穿上缺件 → 下周期重评估(继续凑下一件 / 已满甲)
+                    }
+                }
+            } else {
+                personality.armorSafetyNetSince = 0L; // 料不够 / 已满甲 → 停表,靠挖矿攒够再起
+            }
+        }
+
         // V5.117 Fix-7: smeltTarget 自适应。Sam2024 卡死主因之一：ironIngot=1 时 smeltTarget=8，
         //   需要连炼 8 炉（每炉 200tick ≈ 10s + 走路 ≈ 80s 才能首次再合成）→ 卡 80s+ 才再 craft_done。
         //   解：锭数已 1/2/3 接近目标时不再坚持 8，降低底线让铁甲快速成型。
@@ -205,6 +235,16 @@ public final class PhaseIronAge implements Phase {
             if (targetFurnace == null && smeltInProgress) {
                 targetFurnace = personality.smeltingFurnacePos; // V5.167: 熔炼进行中直接守着摆过料的那口炉
             }
+            // V5.197 (B v2): knownFurnacePos 被 forget / 从没记过 → 先从 furnacesOwned 找回「base 铁匠铺炉」
+            //   (距 fleetHome ≤64、chunk-ready 且仍是炉),回那口固定炉用,而不是漫游到远处/地下就地建残废新炉
+            //   (揣炉放不下死锁的根)。找到 → 下面 setReturnToBase 走回去炼;找不到才落 findFurnace 世界扫描 / 建新。
+            if (targetFurnace == null) {
+                BlockPos baseFurnace = recoverBaseSmithyFurnace(world, personality);
+                if (baseFurnace != null) {
+                    personality.knownFurnacePos = baseFurnace;
+                    targetFurnace = baseFurnace;
+                }
+            }
             if (targetFurnace == null) {
                 BlockPos found = findFurnace(world, player.getBlockPos(), FURNACE_SCAN_RADIUS, personality); // V5.168: 跳黑名单(够不到)炉,别再扫回
                 if (found != null) {
@@ -229,7 +269,13 @@ public final class PhaseIronAge implements Phase {
                 boolean furnaceBlacklisted =
                         com.maohi.fakeplayer.Personality.isFailedTarget(personality, targetFurnace)
                         && !targetFurnace.equals(personality.smeltingFurnacePos);
-                if (fDistSq > 1600.0
+                // V5.197 (B v2): base 铁匠铺炉(距 fleetHome ≤64)不因「太远>40」forget —— 它是家,漫游远了也
+                //   记得、走回去用(下面 setReturnToBase),别就地建残废新炉。deep_below 对地表 base 炉天然不触发
+                //   (炉在下挖 bot 的上方);blacklist(RTB 真够不到)仍忘 → 回落建新/兜底(V5.196 保底穿甲,不裸奔)。
+                BlockPos fhForget = com.maohi.fakeplayer.ai.cognition.SharedResourceMap.getInstance().getFleetHome();
+                boolean isBaseSmithyFurnace = fhForget != null
+                        && targetFurnace.getSquaredDistance(fhForget) <= FLEET_SMITHY_RADIUS_SQ;
+                if ((fDistSq > 1600.0 && !isBaseSmithyFurnace)
                         || (targetFurnace.getY() < player.getBlockY() - 10 && fDistSq > 25.0)
                         || furnaceBlacklisted) {
                     com.maohi.fakeplayer.TaskLogger.log(player, "phase_iron_forget_furnace",
@@ -800,6 +846,28 @@ public final class PhaseIronAge implements Phase {
     }
 
     /**
+     * V5.197 (B v2): 从 furnacesOwned 找一口「base 铁匠铺炉」—— 距 fleetHome ≤ FLEET_SMITHY_RADIUS_SQ、
+     *   chunk 就绪且现场仍是熔炉的 owned 炉。让漫游远 / knownFurnacePos 被 forget 的 bot 回基地那口固定炉炼铁,
+     *   而非在远处/地下就地建残废新炉(furnace_place_gate 揣炉放不下死锁的根)。null = 无(落 findFurnace / 建新)。
+     *   主线程安全:isChunkReady + safeGetBlockState 非阻塞读,未就绪保守跳过绝不误取。
+     */
+    private static BlockPos recoverBaseSmithyFurnace(ServerWorld world, Personality personality) {
+        BlockPos fh = com.maohi.fakeplayer.ai.cognition.SharedResourceMap.getInstance().getFleetHome();
+        if (fh == null || personality.furnacesOwned.isEmpty()) return null;
+        for (BlockPos f : personality.furnacesOwned) {
+            if (f == null || f.getSquaredDistance(fh) > FLEET_SMITHY_RADIUS_SQ) continue;
+            // V5.197: 跳黑名单炉 —— base 炉若被 RTB 拉黑(够不到),recover 回它下面 forget 块又立刻按 blacklist
+            //   清掉,每周期空做一次 recover+forget 刷噪音。拉黑=真够不到 → 别 recover,落 findFurnace/建新/兜底。
+            if (com.maohi.fakeplayer.Personality.isFailedTarget(personality, f)) continue;
+            if (!com.maohi.fakeplayer.ai.PathfindingNavigation.isChunkReady(world, f.getX() >> 4, f.getZ() >> 4)) continue;
+            net.minecraft.block.BlockState st =
+                com.maohi.fakeplayer.ai.PathfindingNavigation.safeGetBlockState(world, f);
+            if (st != null && st.isOf(Blocks.FURNACE)) return f;
+        }
+        return null;
+    }
+
+    /**
      * 扫描附近熔炉方块，成功时同时更新 knownFurnacePos。
      * 扫描逻辑同 SmeltingBehavior.findFurnace，但半径更大。
      */
@@ -1037,9 +1105,17 @@ public final class PhaseIronAge implements Phase {
             }
         }
         // SA-P5: 有营地工作台记录 + ≤ 长途上限 → 回营建炉
+        // V5.195 thrash 修: 加两道守卫,根治 TinySneaky 型「回营空返」死循环(RETURN_TO_BASE=1305/60s=23次/秒):
+        //   ① cobble≥8 —— 回营是为了「贴台合炉」,没 8 圆石回去也合不出炉 → 该落 SA-P6 先挖圆石,别空返。
+        //   ② 不在营地(距 base >WORKBENCH_NEARBY_SQ)才返 —— bot 已在营地却没炉没料时,RETURN_TO_BASE 目标=
+        //      自身位置、秒完成 → 重派 → 秒完成…每 46ms 一次。已在营就落下面 SA-P6/建台,绝不返航到脚下。
         BlockPos saBase = personality.knownWorkbenchPos;
+        double saBaseDistSq = (saBase != null)
+            ? player.getBlockPos().getSquaredDistance(saBase) : Double.MAX_VALUE;
         if (saBase != null
-                && player.getBlockPos().getSquaredDistance(saBase) <= PhaseUtil.SMELT_TRAVEL_MAX_SQ) {
+                && d.cobbleCount >= 8
+                && saBaseDistSq > PhaseUtil.WORKBENCH_NEARBY_SQ
+                && saBaseDistSq <= PhaseUtil.SMELT_TRAVEL_MAX_SQ) {
             PhaseUtil.set(personality, player, TaskType.RETURN_TO_BASE, saBase);
             com.maohi.fakeplayer.TaskLogger.log(player, "stone_smelt_return_base",
                 "reason", "need_furnace", "base", saBase);
