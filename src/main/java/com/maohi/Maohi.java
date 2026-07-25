@@ -328,7 +328,12 @@ public class Maohi implements ModInitializer {
     //   got_diamond 阈值 1→DIAMOND_TRIP_TARGET(5)raw diamond(撞 max_len 兜底,不死钻),减下钻/上爬往返
     //   (往返本身也是 churn,故此项反而"减卡")。③扫描 Y 带修偏 —— 钻石大扫原用铁的 -20~+2(对 y=-59 是
     //   -79~-57:大半在底岩下纯浪费、又漏 -57 以上密集带),改钻石专用 ±8(-67~-51),17 层<铁 23 层=更省。
-    public static final String VERSION = "V5.205";
+    // V5.206 (复核 5.203-205 收尾): 自审 V5.205 #3 的钻石大扫 Y 带 —— ±8(-67~-51)超出 LAYER 真正可达带。
+    //   LAYER 靠 ore-veer mineBlock(3D 距≤4)挖矿,脚上下 ±4 才够得到;±5~±8 层的钻石会被朝它拐却永远挖不到
+    //   (白拐 + 多扫几层多耗 MSPT)。收紧到 ±5(盖可达 ±4 + 1 层余量,11 层<17 层)= 不追够不到的钻、更省更不卡。
+    //   复核其余(-59层/-60守卫干净停层、strip-mine 状态独立于 DIAMOND_AGE 续挖到 5/ max_len 兜底、aimDiamondDescend、
+    //   findNearestBlockBig MSPT 自适应)均确认无阻断。顺带修 PhaseIronAge 一处 "Y-54" 陈旧注释。
+    public static final String VERSION = "V5.206";
 
     private static MaohiConfig config() { return MaohiConfig.getInstance(); }
 

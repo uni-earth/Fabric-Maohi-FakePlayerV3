@@ -642,7 +642,7 @@ public final class PhaseIronAge implements Phase {
         // ── P4.6: 钻石下挖驱动（V5.84）—— 闭环的关键缺口修复 ──
         //   全副武装（全铁甲 + 铁剑 + ≥1 把"健康"铁镐）后，铁器时代此前没有任何机制把假人带到钻石层：
         //   findOre 仅触及脚下 20 格（Y15 扫不到 Y-50 的钻石密集层），P5 的砍树/探索反而把假人拉回地表。
-        //   这里发起 DIAMOND goal strip-mine，确定性挖到 Y-54。挖到第一颗钻石 → StripMineBehavior
+        //   这里发起 DIAMOND goal strip-mine，确定性挖到 Y-59（V5.203）。挖到第一颗钻石 → StripMineBehavior
         //   got_diamond 收手 → derivePhaseFromInventory 升 DIAMOND_AGE → PhaseDiamondAge 接管。
         //
         //   门槛（V5.84.1 用户要求"一把也用到爆"）：仅需 1 把健康铁镐（剩余耐久 ≥ IRON_PICK_MAINTAIN_DUR）。

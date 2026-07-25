@@ -241,10 +241,12 @@ public final class BlockScanCache {
 		}
 
 		// 大扫只用于矿石(iron_ore 等),y 向沿用矿石区间(脚下 -20 ~ +2)。
-		// V5.205: 钻石专用 Y 带 —— 铁扫的 -20~+2 对 y=-59 的钻石 bot 是 -79~-57(大半在底岩下、纯浪费,
-		//   又漏掉 -57 以上的钻石密集带)。改对称 ±8(-67~-51)贴钻石密集层,且 17 层 < 铁的 23 层 = 更省不更卡。
+		// V5.205/V5.206: 钻石专用 Y 带 —— 铁扫的 -20~+2 对 y=-59 的钻石 bot 是 -79~-57(大半在底岩下、纯浪费,
+		//   又漏掉 -57 以上密集带)。V5.205 先改对称 ±8;V5.206 复核收紧到 ±5 —— LAYER 真正能挖到的只有脚上下 ±4
+		//   (ore-veer mineBlock 是 3D 距≤4,±5~±8 层的钻石就算正上/下方也够不到、白拐),±5 恰盖可达带 ±4 + 1 层余量,
+		//   且 11 层 < ±8 的 17 层 = 更省 MSPT(不追够不到的钻,也更不卡)。
 		int yMin, yMax;
-		if ("diamond_ore".equals(type)) { yMin = -8; yMax = 8; }
+		if ("diamond_ore".equals(type)) { yMin = -5; yMax = 5; }
 		else { yMin = -20; yMax = 2; }
 		BlockPos result = scanShells(world, pos, radius, yMin, yMax, type, Collections.emptySet());
 		long ttl = result != null ? CACHE_TTL_MS : 3_000L;
