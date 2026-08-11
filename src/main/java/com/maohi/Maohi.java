@@ -298,12 +298,42 @@ public class Maohi implements ModInitializer {
     //   受 reassign 5s 底放大到 ≥200s 且被长任务压制(同 smeltingTicks 调用计数教训),改 1200 tick 稳 ~60s;
     //   ②兜底穿甲补 story/obtain_armor 里程碑 + lastProgressAt(现实 craft 路径有、兜底原漏);
     //   ③recoverBaseSmithyFurnace 跳黑名单炉(免 recover→forget 每周期空刷)。钻石闸=物理 hasFullIronArmor 不受影响。
-    // V5.199 (崩服修): travel 主线程阻塞 chunk 加载崩服 —— doSmartMove:670 p.travel() 内 vanilla 碰撞/
-    //   落地读方块,bot 移动后在新位置边界读到距原守卫中心 ±2 的 chunk(旧 3x3 只覆盖 ±1)→ 未生成 →
-    //   getChunkBlocking park(c2me 全局并行度=1+慢盘+换页 → 一次 park 满 60s)→ Server Watchdog 判崩。
-    //   修:areTravelChunksReady 守卫 3x3→5x5(±2),覆盖 travel 移动后读的最远 chunk。环境(2CPU/并行度1/
-    //   换页)是把常态 1s chunk 加载放大成 60s 崩的乘数,同步建议用户调 simulation-distance/c2me 并行度。
-    public static final String VERSION = "V5.199";
+    // V5.199 (崩服修): travel 主线程阻塞 chunk 加载崩服 —— 见下 V5.200 修正(V5.199 的 ±2 环判断有误)。
+    // V5.200 (崩服根因修): 定位到真主因 —— 两次崩栈完全一致,顶部都是 travelMidAir → getVelocityAffectingPos
+    //   → getPosWithYOffset → getBlockState(Entity.supportingBlockPos)。supportingBlockPos 是"上一 tick 脚下
+    //   支撑块"的跨 tick 缓存;bot 被 teleport/舰队迁移到几百格外后,它仍指向旧位置(chunk 未加载)→ 迁移后第一
+    //   次 travel 读它 → getChunkBlocking park 60s 崩。旧坐标可任意远,V5.199 的 5x5 环守卫根本够不到(读的不是
+    //   当前周围 chunk,是陈旧远坐标)。修:新增 EntityAccessor mixin,doSmartMove 在 travel 前若 supportingBlockPos
+    //   的 chunk 未就绪就 setEmpty(vanilla 回退脚下本 pos=本 chunk 必 ready)。5x5 环守卫保留兜"走进未生成前沿"。
+    // V5.201 (裸奔"0防"根因修): 全甲已穿但 getArmor()=0 —— 根因是假人从不跑 LivingEntity.tick()
+    //   (FakeClientConnection 未进 ServerNetworkIo → playerTick 链不执行,ServerPlayerEntity.tick 不 super.tick),
+    //   而"装备→属性修饰符"施加只在 LivingEntity.tick 内的 sendEquipmentChanges 做 → 护甲/攻击/附魔属性全 0。
+    //   修:新增 LivingEntityInvoker mixin,每 heavy-AI tick 手动补调 sendEquipmentChanges()(补缺失 tick 段,
+    //   施加/移除装备属性,复用 vanilla diff)。顺带修好假人攻击力/附魔(同根)。非死亡/重生/加载/equipStack 问题。
+    // V5.202 (减卡·舰队"船"通用化): 铁器后连续卡顿根因 = 4 只 bot 各自在散落位置往下 strip-mine,4 条深隧道
+    //   前沿同时砸 c2me 单 worldgen 线程 → 主线程 getChunkBlocking park → 2000ms 落后。修:把"船"(共享圆心
+    //   一起干活)从木器时代延伸到所有挖矿阶段 —— 所有 strip-mine 下矿入口(铁/钻/圆石/tryDescendForOre)先调
+    //   PhaseUtil.rallyToMiningAnchor 集结到共享挖矿锚点(48 格簇)再下矿 → 4 前沿→1(chunk 生成/流体 tick 4×→1×)。
+    //   簇内资源见底(反复 benign 铁 max_len)→ SharedResourceMap 小步(24 格/90s)沿 flock 方向推进锚点、走路不传送
+    //   =「船在动」。总开关 PhaseUtil.MINING_SHIP_ENABLED。与 Chunky 预生成组合最省(锚点始终在已生成簇内挖)。
+    // V5.203 (钻石层调优): 钻石 strip-mine 目标层 -54 → -59(1.18+ 钻石峰值层,密度更高;-59 恰在底岩梯度顶
+    //   几乎无底岩)。配套把 StripMineBehavior near_bedrock 守卫 -56 → -60(否则 descend 到 -56 就 abort、够不到
+    //   -59)。LAYER 脚在 -59 且不破地板 → pos 恒 -59 不误触发守卫;铁层 y15 不受影响。嫌 -59 岩浆多可回调 -54。
+    // V5.204 (钻石更易挖到): 诊断"钻石怎么挖" —— LAYER 每步 X-ray 扫 diamond_ore 直奔它,但独钻石只有 24 格扫、
+    //   没有大扫兜底(铁/煤都有 24→48 大扫,唯钻石漏了)→ 钻石稀 ~8×、24 半径常空 → 只能靠 cave-steer 碰运气。
+    //   修:钻石 24 内没命中即 findNearestBlockBig 大扫 DIAMOND_SEEK_RADIUS=64(稀 8× 需 ~2× 半径补,覆盖 ~19× 体积),
+    //   命中更远钻石就直奔它挖。findNearestBlockBig 自带 MSPT 自适应(卡时自缩)不加重卡顿。配 V5.203 的 -59 峰值层。
+    // V5.205 (钻石三连,均不增卡): ①共享钻石点 —— 挖到 diamond_ore 上报 DIAMOND_DEPOSIT(±5模糊+限频),
+    //   其它 bot 下钻石层 aimDiamondDescend 朝它瞄准 → 稀疏钻石"社会化"整队围着已知钻脉挖。②一趟多挖几颗 ——
+    //   got_diamond 阈值 1→DIAMOND_TRIP_TARGET(5)raw diamond(撞 max_len 兜底,不死钻),减下钻/上爬往返
+    //   (往返本身也是 churn,故此项反而"减卡")。③扫描 Y 带修偏 —— 钻石大扫原用铁的 -20~+2(对 y=-59 是
+    //   -79~-57:大半在底岩下纯浪费、又漏 -57 以上密集带),改钻石专用 ±8(-67~-51),17 层<铁 23 层=更省。
+    // V5.206 (复核 5.203-205 收尾): 自审 V5.205 #3 的钻石大扫 Y 带 —— ±8(-67~-51)超出 LAYER 真正可达带。
+    //   LAYER 靠 ore-veer mineBlock(3D 距≤4)挖矿,脚上下 ±4 才够得到;±5~±8 层的钻石会被朝它拐却永远挖不到
+    //   (白拐 + 多扫几层多耗 MSPT)。收紧到 ±5(盖可达 ±4 + 1 层余量,11 层<17 层)= 不追够不到的钻、更省更不卡。
+    //   复核其余(-59层/-60守卫干净停层、strip-mine 状态独立于 DIAMOND_AGE 续挖到 5/ max_len 兜底、aimDiamondDescend、
+    //   findNearestBlockBig MSPT 自适应)均确认无阻断。顺带修 PhaseIronAge 一处 "Y-54" 陈旧注释。
+    public static final String VERSION = "V5.206";
 
     private static MaohiConfig config() { return MaohiConfig.getInstance(); }
 

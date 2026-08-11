@@ -393,6 +393,8 @@ public final class PhaseIronAge implements Phase {
                         && player.getHealth() > 14.0f) {
                     personality.stripMineForDiamond = false;
                     personality.stripMineForCobble = true;
+                    // V5.202 船: 圆石下矿也先集结到共享锚点(减卡)
+                    if (PhaseUtil.rallyToMiningAnchor(player, personality)) return;
                     personality.stripMineState = PhaseStoneAge.SubPhase.STRIP_MINE_DESCEND;
                     personality.stripMineStartPos = player.getBlockPos().toImmutable();
                     personality.stripMineStartY = player.getBlockY();
@@ -560,6 +562,8 @@ public final class PhaseIronAge implements Phase {
                 //   够不到的矿 → 快失败 → 每秒重 roll 3~4 次 = 217 assigns/60s 的元凶)。目标明确的挖铁无需错峰。
                 personality.stripMineForDiamond = false;
                 personality.stripMineForCobble = false;
+                // V5.202 船: 下矿前先集结到共享挖矿锚点,别在散落位置各自开深隧道前沿(4 前沿→1,减卡)
+                if (PhaseUtil.rallyToMiningAnchor(player, personality)) return;
                 personality.stripMineState = PhaseStoneAge.SubPhase.STRIP_MINE_DESCEND;
                 personality.stripMineStartPos = player.getBlockPos().toImmutable();
                 personality.stripMineStartY = player.getBlockY();
@@ -638,7 +642,7 @@ public final class PhaseIronAge implements Phase {
         // ── P4.6: 钻石下挖驱动（V5.84）—— 闭环的关键缺口修复 ──
         //   全副武装（全铁甲 + 铁剑 + ≥1 把"健康"铁镐）后，铁器时代此前没有任何机制把假人带到钻石层：
         //   findOre 仅触及脚下 20 格（Y15 扫不到 Y-50 的钻石密集层），P5 的砍树/探索反而把假人拉回地表。
-        //   这里发起 DIAMOND goal strip-mine，确定性挖到 Y-54。挖到第一颗钻石 → StripMineBehavior
+        //   这里发起 DIAMOND goal strip-mine，确定性挖到 Y-59（V5.203）。挖到第一颗钻石 → StripMineBehavior
         //   got_diamond 收手 → derivePhaseFromInventory 升 DIAMOND_AGE → PhaseDiamondAge 接管。
         //
         //   门槛（V5.84.1 用户要求"一把也用到爆"）：仅需 1 把健康铁镐（剩余耐久 ≥ IRON_PICK_MAINTAIN_DUR）。
@@ -659,12 +663,16 @@ public final class PhaseIronAge implements Phase {
                 && healthyPicks >= 1) {
             personality.stripMineForDiamond = true;
             personality.stripMineForCobble = false;  // V5.98: 钻石目标,不走圆石早退
+            // V5.202 船: 钻石下矿也先集结到共享锚点(4 前沿→1,减卡)
+            if (PhaseUtil.rallyToMiningAnchor(player, personality)) return;
             personality.stripMineState = PhaseStoneAge.SubPhase.STRIP_MINE_DESCEND;
             personality.stripMineStartPos = player.getBlockPos().toImmutable();
             personality.stripMineStartY = player.getBlockY();
             personality.stripMineTunnelLen = 0;
             personality.stripMineConsecutiveFails = 0;
             personality.currentTask = TaskType.STRIP_MINE;
+            // V5.205: 钻石也瞄准下挖 —— 朝舰队共享 DIAMOND_DEPOSIT / 大扫钻脉方向拐楼梯,整队围着已知钻脉挖。
+            com.maohi.fakeplayer.ai.StripMineBehavior.aimDiamondDescend(player, personality);
             com.maohi.fakeplayer.TaskLogger.log(player, "stripmine_enter",
                 "goal", "diamond", "startY", personality.stripMineStartY,
                 "targetY", smCfg.stripMineDiamondTargetY, "healthyPicks", healthyPicks);
@@ -742,6 +750,8 @@ public final class PhaseIronAge implements Phase {
         }
         personality.stripMineForDiamond = false;
         personality.stripMineForCobble = false;   // 目标=铁,got_iron 收手(口径同 P4.1/SA 下挖)
+        // V5.202 船: tryDescendForOre 也先集结到共享锚点(减卡);还没到锚点返 true(已派走过去,别落 setExplore 散开)
+        if (PhaseUtil.rallyToMiningAnchor(player, personality)) return true;
         personality.stripMineState = PhaseStoneAge.SubPhase.STRIP_MINE_DESCEND;
         personality.stripMineStartPos = player.getBlockPos().toImmutable();
         personality.stripMineStartY = player.getBlockY();
